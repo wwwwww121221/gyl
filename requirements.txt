@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+SQLAlchemy
+psycopg2-binary
+passlib
+python-jose[cryptography]
+pydantic
+pydantic-settings
+python-multipart
+requests
+k3cloud-webapi-sdk
+bcrypt
+python-dotenv
