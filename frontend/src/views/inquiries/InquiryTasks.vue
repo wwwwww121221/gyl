@@ -28,6 +28,12 @@
         >
           <el-table-column type="index" label="序号" width="80" align="center" />
           <el-table-column prop="title" label="任务标题" />
+          <el-table-column prop="deadline" label="截止时间" width="190" align="center">
+            <template #default="scope">
+              <div>{{ formatDateTime(scope.row.deadline) }}</div>
+              <el-tag v-if="hasTaskExpired(scope.row)" type="danger" size="small" effect="plain">已逾期</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="status" label="状态" width="120">
             <template #default="scope">
               <el-tag :type="getTaskStatusType(scope.row.status)">{{ scope.row.status }}</el-tag>
@@ -71,6 +77,9 @@
                 <el-tag :type="getTaskStatusType(currentTaskDetails.status)" effect="dark" size="default" style="margin-left: 15px;">
                   {{ currentTaskDetails.status === 'active' ? '进行中' : (currentTaskDetails.status === 'closed' ? '已结束' : currentTaskDetails.status) }}
                 </el-tag>
+                <el-tag v-if="hasTaskExpired(currentTaskDetails)" type="danger" effect="plain" size="default" style="margin-left: 8px;">
+                  已逾期
+                </el-tag>
               </div>
               <div class="header-actions">
                 <el-button v-if="currentTaskDetails.status === 'active'" type="danger" plain @click="handleCloseTask()">
@@ -79,7 +88,7 @@
               </div>
             </div>
           </template>
-          <el-descriptions :column="3" border size="small">
+          <el-descriptions :column="4" border size="small">
             <el-descriptions-item label="期望单价(¥)">
               <span style="color: #f56c6c; font-weight: bold; font-size: 16px;">详见下方明细</span>
             </el-descriptions-item>
@@ -88,6 +97,14 @@
             </el-descriptions-item>
             <el-descriptions-item label="AI 期望降价幅度">
               <el-tag type="warning" size="small">{{ (currentTaskDetails.strategy_config?.bargain_ratio * 100).toFixed(0) }}%</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="截止时间">
+              {{ formatDateTime(currentTaskDetails.deadline) }}
+            </el-descriptions-item>
+            <el-descriptions-item label="剩余时间" :span="3">
+              <span :class="['countdown-text', { 'countdown-urgent': isDetailDeadlineUrgent }]">
+                {{ detailCountdownText }}
+              </span>
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -124,7 +141,7 @@
                         type="primary"
                       >
                         <el-card shadow="hover" body-style="padding: 10px;">
-                          <el-table :data="quotes" border size="small">
+                          <el-table :data="quotes" :row-class-name="getQuoteRowClassName" border size="small">
                             <el-table-column prop="item_id" label="明细项ID" width="100" align="center" />
                             <el-table-column prop="qty" label="可供数量" width="100" align="center" />
                             <el-table-column prop="delivery_date" label="承诺交期" width="120" align="center">
@@ -132,9 +149,19 @@
                                 {{ formatDate(scope.row.delivery_date) }}
                               </template>
                             </el-table-column>
-                            <el-table-column prop="price" label="单价(¥)" width="120" align="right">
+                            <el-table-column label="单价(¥)" width="150" align="right">
                               <template #default="scope">
                                 <span style="color: #f56c6c; font-weight: bold;">{{ Number(scope.row.price).toFixed(2) }}</span>
+                                <el-tooltip
+                                  v-if="scope.row.is_anomaly"
+                                  :content="scope.row.anomaly_reason"
+                                  placement="top"
+                                  effect="light"
+                                >
+                                  <el-icon color="#e6a23c" style="margin-left: 5px; cursor: pointer; vertical-align: middle;">
+                                    <Warning />
+                                  </el-icon>
+                                </el-tooltip>
                               </template>
                             </el-table-column>
                             <el-table-column prop="remark" label="备注说明" />
@@ -199,11 +226,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { getInquiryTasks, addSupplierToTask, getTaskDetails, closeInquiryTask } from '../../api/inquiry'
 import api from '../../api/index'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, DocumentCopy, Search } from '@element-plus/icons-vue'
+import { Refresh, DocumentCopy, Search, Warning } from '@element-plus/icons-vue'
 
 const loadingTasks = ref(false)
 const taskList = ref([])
@@ -227,6 +254,8 @@ const supplierForm = reactive({
   contact: '',
   phone: ''
 })
+const nowTs = ref(Date.now())
+let timerId = null
 
 const fetchTasks = async () => {
   loadingTasks.value = true
@@ -343,6 +372,34 @@ const formatDate = (dateStr) => {
   return new Date(dateStr).toLocaleDateString()
 }
 
+const getCountdownMeta = (deadline) => {
+  if (!deadline) return { text: '未设置截止时间', urgent: false }
+  const deadlineMs = new Date(deadline).getTime()
+  if (Number.isNaN(deadlineMs)) return { text: '截止时间无效', urgent: false }
+  const diffMs = deadlineMs - nowTs.value
+  if (diffMs <= 0) return { text: '已逾期', urgent: true }
+  const totalSeconds = Math.floor(diffMs / 1000)
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const text = days > 0
+    ? `${days}天 ${hours}时 ${minutes}分 ${seconds}秒`
+    : `${hours}时 ${minutes}分 ${seconds}秒`
+  return { text, urgent: diffMs < 2 * 3600 * 1000 }
+}
+
+const hasTaskExpired = (task) => {
+  if (!task || task.status !== 'active' || !task.deadline) return false
+  const deadlineMs = new Date(task.deadline).getTime()
+  if (Number.isNaN(deadlineMs)) return false
+  return nowTs.value > deadlineMs
+}
+
+const detailCountdownMeta = computed(() => getCountdownMeta(currentTaskDetails.value?.deadline))
+const detailCountdownText = computed(() => detailCountdownMeta.value.text)
+const isDetailDeadlineUrgent = computed(() => detailCountdownMeta.value.urgent)
+
 const getTaskStatusType = (status) => {
   const map = {
     'active': 'success',
@@ -352,8 +409,21 @@ const getTaskStatusType = (status) => {
   return map[status] || ''
 }
 
+const getQuoteRowClassName = ({ row }) => {
+  return row?.is_anomaly ? 'anomaly-row' : ''
+}
+
 onMounted(() => {
   fetchTasks()
+  timerId = window.setInterval(() => {
+    nowTs.value = Date.now()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (timerId) {
+    window.clearInterval(timerId)
+  }
 })
 </script>
 
@@ -474,5 +544,19 @@ onMounted(() => {
   margin-bottom: 15px;
   color: #606266;
   font-size: 15px;
+}
+
+.countdown-text {
+  font-weight: 500;
+  color: #606266;
+}
+
+.countdown-urgent {
+  color: #f56c6c;
+  font-weight: 700;
+}
+
+:deep(.anomaly-row) {
+  background-color: #fff8e1;
 }
 </style>

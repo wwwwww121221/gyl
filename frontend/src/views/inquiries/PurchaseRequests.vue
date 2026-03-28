@@ -86,9 +86,18 @@
 
     <!-- Dialog: Create Task -->
     <el-dialog v-model="dialogVisible" title="创建新询价任务" width="800px">
-      <el-form :model="taskForm" label-width="100px" size="default">
+      <el-form ref="taskFormRef" :model="taskForm" :rules="taskFormRules" label-width="100px" size="default">
         <el-form-item label="任务标题">
           <el-input v-model="taskForm.title" placeholder="例如：3月份电子元器件采购" />
+        </el-form-item>
+        <el-form-item label="截止日期" prop="deadline">
+          <el-date-picker
+            v-model="taskForm.deadline"
+            type="datetime"
+            placeholder="请选择截止时间"
+            style="width: 100%"
+            value-format="YYYY-MM-DDTHH:mm:ss"
+          />
         </el-form-item>
         
         <el-row :gutter="20">
@@ -238,8 +247,10 @@ const handleCurrentChange = (val) => {
 const dialogVisible = ref(false)
 const creatingTask = ref(false)
 const supplierList = ref([])
+const taskFormRef = ref(null)
 const taskForm = reactive({
   title: '',
+  deadline: '',
   supplier_ids: [],
   strategy_config: {
     max_rounds: 3,
@@ -247,6 +258,29 @@ const taskForm = reactive({
     target_total_price: undefined
   }
 })
+
+const validateDeadline = (_, value, callback) => {
+  if (!value) {
+    callback(new Error('请选择截止日期'))
+    return
+  }
+  const deadlineTime = new Date(value).getTime()
+  if (Number.isNaN(deadlineTime)) {
+    callback(new Error('截止日期格式无效'))
+    return
+  }
+  if (deadlineTime <= Date.now()) {
+    callback(new Error('截止日期必须晚于当前时间'))
+    return
+  }
+  callback()
+}
+
+const taskFormRules = {
+  deadline: [
+    { validator: validateDeadline, trigger: 'change' }
+  ]
+}
 
 const fetchSuppliers = async () => {
   try {
@@ -347,6 +381,7 @@ const showCreateTaskDialog = () => {
   
   const date = new Date().toISOString().slice(0, 10)
   taskForm.title = `${date} 批量询价 (${selectedRequestsForTask.value.length}项物料)`
+  taskForm.deadline = ''
   taskForm.supplier_ids = []
   
   fetchSuppliers()
@@ -354,6 +389,9 @@ const showCreateTaskDialog = () => {
 }
 
 const confirmCreateTask = async () => {
+  const formValid = await taskFormRef.value?.validate().catch(() => false)
+  if (!formValid) return
+
   for (let i = 0; i < selectedRequestsForTask.value.length; i++) {
     const item = selectedRequestsForTask.value[i]
     if (item.is_custom && !item.material_name) {
@@ -371,6 +409,7 @@ const confirmCreateTask = async () => {
   try {
     const payload = {
       title: taskForm.title,
+      deadline: taskForm.deadline || null,
       strategy_config: taskForm.strategy_config,
       raw_requests: selectedRequestsForTask.value.map(item => ({
         ...item,

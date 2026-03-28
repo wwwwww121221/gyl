@@ -79,6 +79,7 @@ class InquiryTask(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
     strategy_config = Column(JSON, comment="谈判策略配置 {max_rounds, bargain_ratio...}")
+    deadline = Column(DateTime, nullable=True, comment="询价截止时间")
     status = Column(String, default=TaskStatus.DRAFT)
     created_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.now)

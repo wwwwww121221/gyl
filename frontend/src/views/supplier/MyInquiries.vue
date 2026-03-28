@@ -72,9 +72,16 @@
             </el-descriptions-item>
             <el-descriptions-item label="操作提示">
               <span v-if="canQuote" style="color: #e6a23c; font-weight: bold;">请在下方填写报价并提交</span>
+              <span v-else-if="isDeadlinePassed" style="color: #f56c6c; font-weight: bold;">当前询价已截止，无法报价</span>
               <span v-else style="color: #909399;">当前状态不可报价</span>
             </el-descriptions-item>
           </el-descriptions>
+          <div class="deadline-countdown">
+            <span class="countdown-label">报价截止倒计时：</span>
+            <span :class="['countdown-value', { 'countdown-urgent': isDeadlineUrgent }]">
+              {{ deadlineCountdownText }}
+            </span>
+          </div>
         </el-card>
 
         <div v-if="currentInquiry.latest_ai_feedback" class="feedback-box">
@@ -141,8 +148,8 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="dialogVisible = false">关闭</el-button>
-          <el-button type="primary" @click="submitQuote" :loading="submitLoading" v-if="canQuote">
-            提交报价
+          <el-button type="primary" @click="submitQuote" :loading="submitLoading" :disabled="!canQuote">
+            {{ quoteButtonText }}
           </el-button>
         </span>
       </template>
@@ -151,7 +158,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import api from '../../api/index'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search, ChatLineRound } from '@element-plus/icons-vue'
@@ -194,6 +201,8 @@ const currentInquiry = ref(null)
 const quoteForm = ref({})
 const submitLoading = ref(false)
 const currentLinkId = ref(null)
+const nowTs = ref(Date.now())
+let timerId = null
 
 const fetchInquiries = async () => {
   loading.value = true
@@ -209,6 +218,15 @@ const fetchInquiries = async () => {
 
 onMounted(() => {
   fetchInquiries()
+  timerId = window.setInterval(() => {
+    nowTs.value = Date.now()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (timerId) {
+    window.clearInterval(timerId)
+  }
 })
 
 const getNewStatusText = (row) => {
@@ -284,10 +302,39 @@ const handleDetail = async (row) => {
   }
 }
 
+const getDeadlineMeta = (deadline) => {
+  if (!deadline) return { passed: false, text: '未设置截止时间', urgent: false }
+  const deadlineMs = new Date(deadline).getTime()
+  if (Number.isNaN(deadlineMs)) return { passed: false, text: '截止时间无效', urgent: false }
+  const diffMs = deadlineMs - nowTs.value
+  if (diffMs <= 0) return { passed: true, text: '已截止报价', urgent: true }
+  const totalSeconds = Math.floor(diffMs / 1000)
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const text = days > 0
+    ? `${days}天 ${hours}时 ${minutes}分 ${seconds}秒`
+    : `${hours}时 ${minutes}分 ${seconds}秒`
+  return { passed: false, text, urgent: diffMs < 2 * 3600 * 1000 }
+}
+
+const deadlineMeta = computed(() => getDeadlineMeta(currentInquiry.value?.deadline))
+const deadlineCountdownText = computed(() => deadlineMeta.value.text)
+const isDeadlineUrgent = computed(() => deadlineMeta.value.urgent)
+const isDeadlinePassed = computed(() => deadlineMeta.value.passed)
+
 const canQuote = computed(() => {
   if (!currentInquiry.value) return false
   if (currentInquiry.value.task_status === 'closed' || currentInquiry.value.task_status === 'cancelled') return false
-  return ['sent', 'negotiation'].includes(currentInquiry.value.status)
+  if (isDeadlinePassed.value) return false
+  return ['sent', 'negotiation'].includes(currentInquiry.value.status) && new Date() < new Date(currentInquiry.value.deadline)
+})
+
+const quoteButtonText = computed(() => {
+  if (isDeadlinePassed.value) return '已截止报价'
+  if (!canQuote.value) return '当前不可报价'
+  return '提交报价'
 })
 
 const submitQuote = async () => {
@@ -435,5 +482,24 @@ const submitQuote = async () => {
   font-size: 15px;
   font-weight: bold;
   color: #303133;
+}
+
+.deadline-countdown {
+  margin-top: 12px;
+  font-size: 14px;
+}
+
+.countdown-label {
+  color: #606266;
+}
+
+.countdown-value {
+  color: #303133;
+  font-weight: 500;
+}
+
+.countdown-urgent {
+  color: #f56c6c;
+  font-weight: 700;
 }
 </style>

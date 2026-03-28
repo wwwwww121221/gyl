@@ -12,6 +12,7 @@ def upgrade_db():
         cur.execute("ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS level VARCHAR DEFAULT 'general';")
         cur.execute("ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'approved';")
         cur.execute("ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);")
+        cur.execute("ALTER TABLE inquiry_tasks ADD COLUMN IF NOT EXISTS deadline TIMESTAMP;")
         print("Database upgraded successfully.")
     except Exception as e:
         print(f"Error upgrading database: {e}")

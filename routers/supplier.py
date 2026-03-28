@@ -132,6 +132,7 @@ def get_inquiry_details(
     return {
         "task_title": task.title,
         "task_status": task.status,
+        "deadline": task.deadline,
         "round": link.current_round,
         "status": link.status,
         "latest_ai_feedback": link.latest_ai_feedback,
@@ -160,6 +161,13 @@ async def submit_quote(
     
     if not link:
         raise HTTPException(status_code=404, detail="Inquiry not found")
+
+    link_task = db.query(InquiryTask).filter(InquiryTask.id == link.task_id).first()
+    if not link_task:
+        raise HTTPException(status_code=404, detail="Inquiry task not found")
+
+    if link_task.deadline and datetime.now() > link_task.deadline:
+        raise HTTPException(status_code=400, detail="Inquiry deadline has passed. Quotation submission is closed.")
         
     if link.status == LinkStatus.DEAL or link.status == LinkStatus.REJECT:
         raise HTTPException(status_code=400, detail="Inquiry is already closed for you.")
@@ -194,8 +202,6 @@ async def submit_quote(
         db.commit() # 先提交报价记录
     else:
         raise HTTPException(status_code=400, detail="Current link status does not allow quoting.")
-
-    link_task = db.query(InquiryTask).filter(InquiryTask.id == link.task_id).first()
 
     # 2. 检查期望价格自动成交
     strategy = link_task.strategy_config or {}

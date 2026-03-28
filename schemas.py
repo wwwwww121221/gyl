@@ -64,13 +64,16 @@ class StrategyConfig(BaseModel):
 class InquiryTaskBase(BaseModel):
     title: str
     strategy_config: StrategyConfig
+    deadline: Optional[datetime] = None
 
 class InquiryTaskCreate(InquiryTaskBase):
+    deadline: Optional[datetime] = None
     request_ids: Optional[List[int]] = None
     raw_requests: Optional[List[InquiryRequestCreate]] = None
     supplier_ids: Optional[List[int]] = None
 
 class InquiryTask(InquiryTaskBase):
+    deadline: Optional[datetime] = None
     id: int
     status: str
     created_by: int

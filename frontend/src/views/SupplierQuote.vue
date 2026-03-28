@@ -24,6 +24,13 @@
           </div>
         </template>
 
+        <div class="deadline-countdown">
+          <span class="countdown-label">报价截止倒计时：</span>
+          <span :class="['countdown-value', { 'countdown-urgent': isDeadlineUrgent }]">
+            {{ deadlineCountdownText }}
+          </span>
+        </div>
+
         <div v-if="aiFeedback" class="ai-feedback-alert">
           <el-alert
             title="来自采购方的反馈消息："
@@ -48,6 +55,7 @@
                     placeholder="选择交期"
                     style="width: 100%"
                     value-format="YYYY-MM-DD"
+                    :disabled="!canQuote"
                   />
                 </el-form-item>
               </template>
@@ -55,14 +63,14 @@
             <el-table-column label="含税单价 (¥)" width="150">
               <template #default="scope">
                 <el-form-item :prop="'items.' + scope.$index + '.price'" :rules="{ required: true, message: '请输入单价', trigger: 'blur' }" style="margin-bottom: 0;">
-                  <el-input-number v-model="scope.row.price" :min="0" :precision="2" :step="0.1" style="width: 100%" controls-position="right" />
+                  <el-input-number v-model="scope.row.price" :min="0" :precision="2" :step="0.1" style="width: 100%" controls-position="right" :disabled="!canQuote" />
                 </el-form-item>
               </template>
             </el-table-column>
             <el-table-column label="备注说明" min-width="150">
               <template #default="scope">
                 <el-form-item :prop="'items.' + scope.$index + '.remark'" style="margin-bottom: 0;">
-                  <el-input v-model="scope.row.remark" placeholder="如：品牌、包装等" />
+                  <el-input v-model="scope.row.remark" placeholder="如：品牌、包装等" :disabled="!canQuote" />
                 </el-form-item>
               </template>
             </el-table-column>
@@ -72,8 +80,8 @@
             <div class="total-price">
               预计总金额：<span class="price-val">¥ {{ calculateTotal().toFixed(2) }}</span>
             </div>
-            <el-button type="primary" size="large" @click="submitQuote" :loading="submitting">
-              提交本轮报价
+            <el-button type="primary" size="large" @click="submitQuote" :loading="submitting" :disabled="!canQuote">
+              {{ submitButtonText }}
             </el-button>
           </div>
         </el-form>
@@ -96,7 +104,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
@@ -111,6 +119,8 @@ const formRef = ref(null)
 const submitting = ref(false)
 const aiFeedback = ref('')
 const successResult = ref(null)
+const nowTs = ref(Date.now())
+let timerId = null
 
 const form = reactive({
   items: []
@@ -204,8 +214,44 @@ const getRoundTagType = (round) => {
   return 'danger'
 }
 
+const getDeadlineMeta = (deadline) => {
+  if (!deadline) return { passed: false, text: '未设置截止时间', urgent: false }
+  const deadlineMs = new Date(deadline).getTime()
+  if (Number.isNaN(deadlineMs)) return { passed: false, text: '截止时间无效', urgent: false }
+  const diffMs = deadlineMs - nowTs.value
+  if (diffMs <= 0) return { passed: true, text: '已截止报价', urgent: true }
+  const totalSeconds = Math.floor(diffMs / 1000)
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const text = days > 0
+    ? `${days}天 ${hours}时 ${minutes}分 ${seconds}秒`
+    : `${hours}时 ${minutes}分 ${seconds}秒`
+  return { passed: false, text, urgent: diffMs < 2 * 3600 * 1000 }
+}
+
+const deadlineMeta = computed(() => getDeadlineMeta(quoteInfo.value?.deadline))
+const deadlineCountdownText = computed(() => deadlineMeta.value.text)
+const isDeadlineUrgent = computed(() => deadlineMeta.value.urgent)
+const isDeadlinePassed = computed(() => deadlineMeta.value.passed)
+
+const canQuote = computed(() => {
+  if (!quoteInfo.value) return false
+  if (!['sent', 'negotiation'].includes(quoteInfo.value.status)) return false
+  if (isDeadlinePassed.value) return false
+  return new Date() < new Date(quoteInfo.value.deadline)
+})
+
+const submitButtonText = computed(() => {
+  if (isDeadlinePassed.value) return '已截止报价'
+  if (!canQuote.value) return '当前不可报价'
+  return '提交本轮报价'
+})
+
 const submitQuote = async () => {
   if (!formRef.value) return
+  if (!canQuote.value) return
   
   await formRef.value.validate(async (valid) => {
     if (valid) {
@@ -252,11 +298,20 @@ const resetForNextRound = () => {
 }
 
 onMounted(() => {
+  timerId = window.setInterval(() => {
+    nowTs.value = Date.now()
+  }, 1000)
   if (token) {
     fetchQuoteInfo()
   } else {
     error.value = '未提供有效的链接Token'
     loading.value = false
+  }
+})
+
+onUnmounted(() => {
+  if (timerId) {
+    window.clearInterval(timerId)
   }
 })
 </script>
@@ -306,6 +361,25 @@ onMounted(() => {
   color: #409EFF;
   font-weight: bold;
   font-size: 16px;
+}
+
+.deadline-countdown {
+  margin-bottom: 14px;
+  font-size: 14px;
+}
+
+.countdown-label {
+  color: #606266;
+}
+
+.countdown-value {
+  color: #303133;
+  font-weight: 500;
+}
+
+.countdown-urgent {
+  color: #f56c6c;
+  font-weight: 700;
 }
 
 .ai-feedback-alert {

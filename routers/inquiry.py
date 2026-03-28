@@ -94,6 +94,7 @@ def create_inquiry_task(
     new_task = InquiryTask(
         title=task_in.title,
         strategy_config=task_in.strategy_config.dict(),
+        deadline=task_in.deadline,
         status=TaskStatus.ACTIVE,
         created_by=current_user.id
     )
@@ -228,19 +229,44 @@ def get_task_details(
             "delivery_date": item.request.delivery_date
         })
 
+    price_groups = {}
+    for link in task.suppliers:
+        for q in link.quotations:
+            group_key = (q.round, q.item_id)
+            if group_key not in price_groups:
+                price_groups[group_key] = []
+            if q.price is not None:
+                price_groups[group_key].append(q.price)
+
+    avg_price_map = {}
+    for group_key, prices in price_groups.items():
+        if len(prices) >= 2:
+            avg_price_map[group_key] = sum(prices) / len(prices)
+
     links = []
     for link in task.suppliers:
-        # 整理该链接下的所有报价记录，按轮次分组
         quotes_by_round = {}
         for q in link.quotations:
             if q.round not in quotes_by_round:
                 quotes_by_round[q.round] = []
+            avg_price = avg_price_map.get((q.round, q.item_id))
+            is_anomaly = False
+            anomaly_reason = ""
+            if avg_price is not None:
+                if q.price <= avg_price * 0.5:
+                    is_anomaly = True
+                    anomaly_reason = "报价低于本轮均价 50% 以上，请核实规格/单位"
+                elif q.price >= avg_price * 2.0:
+                    is_anomaly = True
+                    anomaly_reason = "报价异常偏高（超均价 2 倍），请警惕溢价风险"
             quotes_by_round[q.round].append({
                 "item_id": q.item_id,
                 "qty": q.qty,
                 "price": q.price,
                 "delivery_date": q.delivery_date,
-                "remark": q.remark
+                "remark": q.remark,
+                "is_anomaly": is_anomaly,
+                "anomaly_reason": anomaly_reason
             })
 
         links.append({
@@ -254,6 +280,7 @@ def get_task_details(
     return {
         "id": task.id,
         "title": task.title,
+        "deadline": task.deadline,
         "status": task.status,
         "strategy_config": task.strategy_config,
         "items": items,
