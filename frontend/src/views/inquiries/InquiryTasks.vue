@@ -182,7 +182,7 @@
               </el-table-column>
               <el-table-column prop="current_round" label="当前轮次" width="100" align="center" />
 
-              <el-table-column label="操作" width="120" align="center" fixed="right">
+              <el-table-column label="操作" width="260" align="center" fixed="right">
                 <template #default="scope">
                   <el-button 
                     v-if="currentTaskDetails.status === 'active' && scope.row.status !== 'deal' && scope.row.status !== 'reject'" 
@@ -195,6 +195,24 @@
                   <span v-else-if="scope.row.status === 'deal'" style="color: #67c23a; font-weight: bold;">已成交</span>
                   <span v-else-if="scope.row.status === 'reject'" style="color: #909399;">已淘汰</span>
                   <span v-else>-</span>
+                  <el-button
+                    v-if="currentTaskDetails.status === 'active' && scope.row.status === 'negotiation'"
+                    size="small"
+                    type="warning"
+                    plain
+                    @click="openManualInterventionDialog(scope.row, 'continue')"
+                  >
+                    人工通过
+                  </el-button>
+                  <el-button
+                    v-if="currentTaskDetails.status === 'active' && scope.row.status === 'negotiation'"
+                    size="small"
+                    type="danger"
+                    plain
+                    @click="openManualInterventionDialog(scope.row, 'reject')"
+                  >
+                    人工淘汰
+                  </el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -221,6 +239,29 @@
 
         </el-tabs>
       </div>
+    </el-dialog>
+
+    <el-dialog
+      v-model="manualInterventionDialogVisible"
+      :title="manualInterventionMode === 'continue' ? '人工通过谈判' : '人工淘汰供应商'"
+      width="520px"
+    >
+      <el-form :model="manualInterventionForm" label-width="92px">
+        <el-form-item label="处理说明">
+          <el-input
+            v-model="manualInterventionForm.message"
+            type="textarea"
+            :rows="4"
+            :placeholder="manualInterventionMode === 'continue' ? '请输入给供应商的人工复核反馈' : '请输入淘汰原因（将同步给供应商）'"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="manualInterventionDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="manualInterventionSubmitting" @click="submitManualIntervention">
+          确认提交
+        </el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -253,6 +294,13 @@ const supplierForm = reactive({
   name: '',
   contact: '',
   phone: ''
+})
+const manualInterventionDialogVisible = ref(false)
+const manualInterventionSubmitting = ref(false)
+const manualInterventionMode = ref('continue')
+const manualInterventionLinkId = ref(null)
+const manualInterventionForm = reactive({
+  message: ''
 })
 const nowTs = ref(Date.now())
 let timerId = null
@@ -314,6 +362,33 @@ const handleDeleteTask = async (task) => {
       console.error(e)
       ElMessage.error('删除失败')
     }
+  }
+}
+
+const openManualInterventionDialog = (row, mode) => {
+  manualInterventionMode.value = mode
+  manualInterventionLinkId.value = row.link_id
+  manualInterventionForm.message = ''
+  manualInterventionDialogVisible.value = true
+}
+
+const submitManualIntervention = async () => {
+  if (!currentTaskDetails.value || !manualInterventionLinkId.value) return
+  manualInterventionSubmitting.value = true
+  try {
+    const endpoint = manualInterventionMode.value === 'continue' ? 'manual-continue' : 'manual-reject'
+    await api.post(`/inquiry/tasks/${currentTaskDetails.value.id}/links/${manualInterventionLinkId.value}/${endpoint}`, {
+      message: manualInterventionForm.message || null
+    })
+    ElMessage.success(manualInterventionMode.value === 'continue' ? '已人工通过，供应商可继续谈判' : '已人工淘汰该供应商')
+    manualInterventionDialogVisible.value = false
+    await viewTaskDetails(currentTask.value)
+    await fetchTasks()
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('人工干预失败')
+  } finally {
+    manualInterventionSubmitting.value = false
   }
 }
 

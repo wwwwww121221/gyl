@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
+from pydantic import BaseModel
 import uuid
 
 from models import (
@@ -15,6 +16,9 @@ from jose import jwt, JWTError
 from core.config import settings
 
 router = APIRouter()
+
+class ManualInterventionPayload(BaseModel):
+    message: Optional[str] = None
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
@@ -339,3 +343,60 @@ def close_inquiry_task(
 
     db.commit()
     return {"message": "Task closed successfully."}
+
+@router.post("/tasks/{task_id}/links/{link_id}/manual-continue")
+def manual_continue_negotiation(
+    task_id: int,
+    link_id: int,
+    payload: ManualInterventionPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    if current_user.role not in ["admin", "buyer"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    task = db.query(InquiryTask).filter(InquiryTask.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    link = db.query(InquirySupplier).filter(
+        InquirySupplier.id == link_id,
+        InquirySupplier.task_id == task_id
+    ).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Supplier link not found")
+
+    if task.status != TaskStatus.ACTIVE:
+        raise HTTPException(status_code=400, detail="Task is not active")
+
+    link.status = LinkStatus.NEGOTIATION
+    link.latest_ai_feedback = payload.message or "采购员已人工复核报价，请基于目标区间重新提交报价。"
+    db.commit()
+    return {"message": "已人工确认，供应商可继续谈判。"}
+
+@router.post("/tasks/{task_id}/links/{link_id}/manual-reject")
+def manual_reject_link(
+    task_id: int,
+    link_id: int,
+    payload: ManualInterventionPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    if current_user.role not in ["admin", "buyer"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    task = db.query(InquiryTask).filter(InquiryTask.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    link = db.query(InquirySupplier).filter(
+        InquirySupplier.id == link_id,
+        InquirySupplier.task_id == task_id
+    ).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Supplier link not found")
+
+    link.status = LinkStatus.REJECT
+    link.latest_ai_feedback = payload.message or "经采购员人工复核，当前报价不满足要求，本轮已终止。"
+    db.commit()
+    return {"message": "已人工淘汰该供应商。"}

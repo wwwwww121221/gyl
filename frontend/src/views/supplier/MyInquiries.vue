@@ -160,7 +160,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import api from '../../api/index'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search, ChatLineRound } from '@element-plus/icons-vue'
 
 const inquiries = ref([])
@@ -340,22 +340,27 @@ const quoteButtonText = computed(() => {
 const submitQuote = async () => {
   if (!currentInquiry.value) return
   
-  const items = Object.keys(quoteForm.value).map(reqId => {
-    let d = quoteForm.value[reqId].delivery_date;
-    if (d && d.length === 10) { // If it's just 'YYYY-MM-DD', append time to make backend parser happy
-      d = d + 'T00:00:00';
-    }
-    return {
-      request_id: parseInt(reqId),
-      qty: quoteForm.value[reqId].qty,
-      price: quoteForm.value[reqId].price,
-      delivery_date: d || null,
-      remark: quoteForm.value[reqId].remark
-    }
-  })
+  const buildPayload = (forceSubmit = false) => {
+    const items = Object.keys(quoteForm.value).map(reqId => {
+      let d = quoteForm.value[reqId].delivery_date;
+      if (d && d.length === 10) {
+        d = d + 'T00:00:00';
+      }
+      return {
+        request_id: parseInt(reqId),
+        qty: quoteForm.value[reqId].qty,
+        price: quoteForm.value[reqId].price,
+        delivery_date: d || null,
+        remark: quoteForm.value[reqId].remark
+      }
+    })
+    return { items, force_submit: forceSubmit }
+  }
+  
+  const payload = buildPayload(false)
   
   // validation
-  const invalid = items.some(item => item.price <= 0)
+  const invalid = payload.items.some(item => item.price <= 0)
   if (invalid) {
     ElMessage.warning('请输入有效的报价金额')
     return
@@ -363,12 +368,38 @@ const submitQuote = async () => {
   
   submitLoading.value = true
   try {
-    const res = await api.post(`/supplier/inquiry/${currentLinkId.value}/quote`, { items })
-    ElMessage.success(res.data.message || '报价提交成功')
-    dialogVisible.value = false
-    fetchInquiries() // refresh list
+    const res = await api.post(`/supplier/inquiry/${currentLinkId.value}/quote`, payload)
+    
+    // 拦截后端预警：如果是异常报价，弹出确认框
+    if (res.data?.next_action === 'confirm_anomaly') {
+      try {
+        await ElMessageBox.confirm(
+          res.data.message,
+          '异常报价确认',
+          {
+            confirmButtonText: '确认无误，强行提交',
+            cancelButtonText: '返回修改',
+            type: 'warning'
+          }
+        )
+        // 供应商点击“强行提交”，带上 force_submit: true 重新发起请求
+        submitLoading.value = true
+        const forceRes = await api.post(`/supplier/inquiry/${currentLinkId.value}/quote`, buildPayload(true))
+        ElMessage.success(forceRes.data.message || '强行提交成功')
+        dialogVisible.value = false
+        fetchInquiries()
+      } catch {
+        // 用户点击取消，停留在当前弹窗修改价格
+      }
+    } else {
+      // 价格正常，直接走成功逻辑
+      ElMessage.success(res.data.message || '报价提交成功')
+      dialogVisible.value = false
+      fetchInquiries()
+    }
   } catch (error) {
     console.error(error)
+    ElMessage.error(error.response?.data?.detail || '提交失败')
   } finally {
     submitLoading.value = false
   }
