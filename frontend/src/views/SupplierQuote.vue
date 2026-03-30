@@ -249,6 +249,21 @@ const submitButtonText = computed(() => {
   return '提交本轮报价'
 })
 
+const buildQuotePayload = (forceSubmit = false) => ({
+  items: form.items.map(i => ({
+    request_id: i.request_id,
+    price: i.price,
+    delivery_date: i.delivery_date ? new Date(i.delivery_date).toISOString() : new Date().toISOString(),
+    remark: i.remark || ''
+  })),
+  force_submit: forceSubmit
+})
+
+const handleQuoteSubmitResponse = (data) => {
+  successResult.value = data
+  quoteInfo.value = null
+}
+
 const submitQuote = async () => {
   if (!formRef.value) return
   if (!canQuote.value) return
@@ -266,18 +281,25 @@ const submitQuote = async () => {
       ).then(async () => {
         submitting.value = true
         try {
-          const payload = {
-            items: form.items.map(i => ({
-              request_id: i.request_id,
-              price: i.price,
-              delivery_date: i.delivery_date ? new Date(i.delivery_date).toISOString() : new Date().toISOString(),
-              remark: i.remark || ''
-            }))
+          const firstRes = await api.post(`/supplier/quote/${token}`, buildQuotePayload(false))
+          if (firstRes.data?.next_action === 'confirm_anomaly') {
+            try {
+              await ElMessageBox.confirm(
+                firstRes.data.message || '检测到异常报价，是否确认无误并继续提交？',
+                '异常报价确认',
+                {
+                  confirmButtonText: '确认无误，继续提交',
+                  cancelButtonText: '返回修改',
+                  type: 'warning'
+                }
+              )
+              const forceRes = await api.post(`/supplier/quote/${token}`, buildQuotePayload(true))
+              handleQuoteSubmitResponse(forceRes.data)
+            } catch {
+            }
+          } else {
+            handleQuoteSubmitResponse(firstRes.data)
           }
-          const res = await api.post(`/supplier/quote/${token}`, payload)
-          
-          successResult.value = res.data
-          quoteInfo.value = null // 隐藏表单
           
         } catch (err) {
           console.error(err)

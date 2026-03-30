@@ -230,7 +230,7 @@ def get_task_details(
         })
 
     # 建立任务明细项(item_id)到期望单价(target_price)的映射
-    target_price_map = {item.id: item.request.target_price for item in task.items if item.request.target_price}
+    target_price_map = {item.id: item.request.target_price for item in task.items if item.request.target_price is not None}
 
     links = []
     for link in task.suppliers:
@@ -244,7 +244,7 @@ def get_task_details(
             anomaly_reason = ""
             
             # 完全以期望单价作为唯一基准进行异常检测
-            if target_p is not None:
+            if target_p is not None and target_p > 0:
                 if q.price <= target_p * 0.5:
                     is_anomaly = True
                     anomaly_reason = "异常低价：低于期望单价 50% 以上，存在错报风险"

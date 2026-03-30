@@ -178,6 +178,32 @@ async def submit_quote(
             Quotation.round == link.current_round
         ).all()
     elif link.status in [LinkStatus.SENT, LinkStatus.NEGOTIATION]:
+        # === 新增：异常报价前置预检 ===
+        if not getattr(submission, 'force_submit', False):
+            anomaly_names = []
+            for item in submission.items:
+                # 预查期望价
+                t_item = db.query(InquiryTaskItem).filter(
+                    InquiryTaskItem.task_id == link.task_id,
+                    InquiryTaskItem.request_id == item.request_id
+                ).first()
+                r_item = db.query(InquiryRequest).filter(InquiryRequest.id == t_item.request_id).first() if t_item else None
+                
+                if r_item and r_item.target_price and r_item.target_price > 0:
+                    # 如果报价偏离期望价 50% 以上，记录异常
+                    if item.price <= r_item.target_price * 0.5 or item.price >= r_item.target_price * 1.5:
+                        anomaly_names.append(r_item.material_name)
+            
+            # 如果发现异常，拦截提交并返回特定 action 让前端弹窗
+            if anomaly_names:
+                names_str = ", ".join(anomaly_names[:3]) + (" 等" if len(anomaly_names) > 3 else "")
+                return {
+                    "message": f"预警：系统检测到【{names_str}】的报价大幅偏离常规预期，请仔细核对是否报错了规格或单位。如确认无误，请在弹窗中强行提交。",
+                    "next_action": "confirm_anomaly",
+                    "ai_feedback": ""
+                }
+        # === 预检结束 ===
+
         quote_items = []
         for item in submission.items:
             task_item = db.query(InquiryTaskItem).filter(
@@ -224,7 +250,7 @@ async def submit_quote(
                 all_meet_target = False
                 break
             # 2. 熔断机制：价格异常过低（低于期望单价的50%），拦截自动成交，强制转为人工确认
-            elif q.price <= target_price * 0.5:
+            elif target_price > 0 and q.price <= target_price * 0.5:
                 all_meet_target = False
                 break
     
@@ -285,11 +311,32 @@ async def submit_quote(
                 
             # 显式查询以避免 async def 中的 SQLAlchemy lazy load 问题
             item_summary_lines = []
+            needs_manual_review = False
+            anomaly_reason = ""
+            
             for q in l_quotes:
                 t_item = db.query(InquiryTaskItem).filter(InquiryTaskItem.id == q.item_id).first()
                 r_item = db.query(InquiryRequest).filter(InquiryRequest.id == t_item.request_id).first()
                 item_summary_lines.append(f"- 物料名称 '{r_item.material_name}': 报价 ¥{q.price}")
+                
+                # 检查是否存在异常报价（双向防线：过低或过高）
+                target_p = r_item.target_price if r_item else None
+                if target_p is not None and target_p > 0:
+                    if q.price <= target_p * 0.5:
+                        needs_manual_review = True
+                        anomaly_reason = "大幅低于期望基准（存在漏报或错报规格风险）"
+                    elif q.price >= target_p * 1.5:
+                        needs_manual_review = True
+                        anomaly_reason = "大幅高于期望基准（存在错报单位或溢价过高风险）"
             
+            # 1. 拦截大模型：如果存在异常报价，强制跳过 AI 自动砍价，锁入人工复核状态
+            if needs_manual_review:
+                l.latest_ai_feedback = f"⚠️ 系统预警：您的报价{anomaly_reason}。系统已暂停您的自动谈判流程，并转交采购员进行人工核对，请等待采购方主动联系。"
+                l.current_round += 1
+                l.status = LinkStatus.NEGOTIATION
+                return
+            
+            # 2. 只有在正常价格区间内，才进行大模型 5% 的议价谈判逻辑
             item_summary = "\n".join(item_summary_lines)
             
             prompt = f"""

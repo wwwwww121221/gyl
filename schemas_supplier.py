@@ -11,6 +11,7 @@ class QuoteItem(BaseModel):
 
 class QuoteSubmission(BaseModel):
     items: List[QuoteItem]
+    force_submit: Optional[bool] = False
 
 class SupplierQuoteResponse(BaseModel):
     message: str
