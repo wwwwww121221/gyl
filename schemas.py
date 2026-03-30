@@ -63,7 +63,7 @@ class StrategyConfig(BaseModel):
 
 class InquiryTaskBase(BaseModel):
     title: str
-    strategy_config: StrategyConfig
+    strategy_config: Optional[StrategyConfig] = None
     deadline: Optional[datetime] = None
 
 class InquiryTaskCreate(InquiryTaskBase):
@@ -75,9 +75,9 @@ class InquiryTaskCreate(InquiryTaskBase):
 class InquiryTask(InquiryTaskBase):
     deadline: Optional[datetime] = None
     id: int
-    status: str
-    created_by: int
-    created_at: datetime
+    status: Optional[str] = None
+    created_by: Optional[int] = None
+    created_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True

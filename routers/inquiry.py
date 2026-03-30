@@ -93,7 +93,7 @@ def create_inquiry_task(
     # 2. 创建任务
     new_task = InquiryTask(
         title=task_in.title,
-        strategy_config=task_in.strategy_config.dict(),
+        strategy_config=task_in.strategy_config.dict() if task_in.strategy_config else {},
         deadline=task_in.deadline,
         status=TaskStatus.ACTIVE,
         created_by=current_user.id
