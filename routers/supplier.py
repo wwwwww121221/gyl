@@ -219,7 +219,12 @@ async def submit_quote(
         
         if target_price is not None:
             has_target_price_set = True
+            # 1. 价格高于期望价，不满足自动成交条件
             if q.price > target_price:
+                all_meet_target = False
+                break
+            # 2. 熔断机制：价格异常过低（低于期望单价的50%），拦截自动成交，强制转为人工确认
+            elif q.price <= target_price * 0.5:
                 all_meet_target = False
                 break
     

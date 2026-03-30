@@ -229,19 +229,8 @@ def get_task_details(
             "delivery_date": item.request.delivery_date
         })
 
-    price_groups = {}
-    for link in task.suppliers:
-        for q in link.quotations:
-            group_key = (q.round, q.item_id)
-            if group_key not in price_groups:
-                price_groups[group_key] = []
-            if q.price is not None:
-                price_groups[group_key].append(q.price)
-
-    avg_price_map = {}
-    for group_key, prices in price_groups.items():
-        if len(prices) >= 2:
-            avg_price_map[group_key] = sum(prices) / len(prices)
+    # 建立任务明细项(item_id)到期望单价(target_price)的映射
+    target_price_map = {item.id: item.request.target_price for item in task.items if item.request.target_price}
 
     links = []
     for link in task.suppliers:
@@ -249,16 +238,19 @@ def get_task_details(
         for q in link.quotations:
             if q.round not in quotes_by_round:
                 quotes_by_round[q.round] = []
-            avg_price = avg_price_map.get((q.round, q.item_id))
+            
+            target_p = target_price_map.get(q.item_id)
             is_anomaly = False
             anomaly_reason = ""
-            if avg_price is not None:
-                if q.price <= avg_price * 0.5:
+            
+            # 完全以期望单价作为唯一基准进行异常检测
+            if target_p is not None:
+                if q.price <= target_p * 0.5:
                     is_anomaly = True
-                    anomaly_reason = "报价低于本轮均价 50% 以上，请核实规格/单位"
-                elif q.price >= avg_price * 2.0:
+                    anomaly_reason = "异常低价：低于期望单价 50% 以上，存在错报风险"
+                elif q.price >= target_p * 1.5:
                     is_anomaly = True
-                    anomaly_reason = "报价异常偏高（超均价 2 倍），请警惕溢价风险"
+                    anomaly_reason = "异常高价：大幅偏离期望单价，请警惕溢价风险"
             quotes_by_round[q.round].append({
                 "item_id": q.item_id,
                 "qty": q.qty,
