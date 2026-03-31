@@ -1,9 +1,16 @@
+import os
+import warnings
 from datetime import datetime
 from pathlib import Path
 from decimal import Decimal
+from uuid import uuid4
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session
 
 from models import InquirySupplier, InquiryTask, InquiryTaskItem, InquiryRequest, Quotation, Supplier, LinkStatus
@@ -12,6 +19,20 @@ from models import InquirySupplier, InquiryTask, InquiryTaskItem, InquiryRequest
 BASE_DIR = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = BASE_DIR / "static" / "templates"
 CONTRACT_DIR = BASE_DIR / "static" / "contracts"
+FONT_DIR = BASE_DIR / "static" / "fonts"
+SIMSUN_PATH = FONT_DIR / "SimSun.ttf"
+SYSTEM_SIMSUN_PATH = Path("C:/Windows/Fonts/simsun.ttc")
+os.makedirs("static/contracts", exist_ok=True)
+TEMPLATE_CELLS = {
+    "supplier_name": "E3",
+    "buyer_name": "E4",
+    "contract_no": "L3",
+    "project_no": "F6",
+    "project_name": "H7",
+    "total_amount_upper": "H9",
+    "total_qty": "P9",
+    "total_amount": "AA9",
+}
 
 
 def _resolve_template_path() -> Path:
@@ -27,16 +48,38 @@ def _resolve_template_path() -> Path:
     raise FileNotFoundError("合同模板文件不存在，请将‘合同模版.xlsx’放入 static/templates 目录")
 
 
+def _register_pdf_font() -> str:
+    font_candidates = [SIMSUN_PATH, SYSTEM_SIMSUN_PATH]
+    for font_path in font_candidates:
+        if font_path.exists():
+            try:
+                pdfmetrics.registerFont(TTFont("SimSun", str(font_path.resolve())))
+                return "SimSun"
+            except Exception:
+                continue
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    return "STSong-Light"
+
+
+def _import_win32_modules():
+    try:
+        import pythoncom
+        from win32com import client as win32
+        return pythoncom, win32
+    except Exception:
+        return None, None
+
+
 def _normalize_template_for_openpyxl(template_path: Path) -> Path:
     normalized_path = CONTRACT_DIR / "_normalized_template.xlsx"
-    try:
-        from win32com import client as win32
-    except Exception as exc:
-        raise RuntimeError("模板文件无法被 openpyxl 正常读取，且未检测到 pywin32") from exc
+    pythoncom, win32 = _import_win32_modules()
+    if not pythoncom or not win32:
+        raise RuntimeError("模板文件无法被 openpyxl 正常读取，且未检测到 pywin32")
 
     excel = None
     workbook = None
     try:
+        pythoncom.CoInitialize()
         excel = win32.DispatchEx("Excel.Application")
         excel.Visible = False
         excel.DisplayAlerts = False
@@ -48,7 +91,23 @@ def _normalize_template_for_openpyxl(template_path: Path) -> Path:
             workbook.Close(False)
         if excel is not None:
             excel.Quit()
+        pythoncom.CoUninitialize()
     return normalized_path
+
+
+def _safe_load_workbook(file_path: Path):
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            wb = load_workbook(file_path)
+        has_invalid_spec_warning = any("invalid specification" in str(w.message).lower() for w in caught)
+        if has_invalid_spec_warning:
+            normalized_template = _normalize_template_for_openpyxl(file_path)
+            return load_workbook(normalized_template)
+        return wb
+    except Exception:
+        normalized_template = _normalize_template_for_openpyxl(file_path)
+        return load_workbook(normalized_template)
 
 
 def _resolve_deal_link(db: Session, inquiry_id: int) -> InquirySupplier:
@@ -75,6 +134,41 @@ def _to_decimal(val) -> Decimal:
     return Decimal(str(val))
 
 
+def _to_chinese_upper_amount(amount: Decimal) -> str:
+    digits = "零壹贰叁肆伍陆柒捌玖"
+    units = ["", "拾", "佰", "仟"]
+    big_units = ["", "万", "亿", "兆"]
+    integer = int(amount.quantize(Decimal("1")))
+    if integer == 0:
+        return "零圆整"
+    groups = []
+    while integer > 0:
+        groups.append(integer % 10000)
+        integer //= 10000
+    text_parts = []
+    for gi in range(len(groups) - 1, -1, -1):
+        group = groups[gi]
+        if group == 0:
+            if text_parts and not text_parts[-1].endswith("零"):
+                text_parts.append("零")
+            continue
+        group_text = ""
+        zero_flag = False
+        for pos in range(3, -1, -1):
+            divisor = 10 ** pos
+            n = group // divisor
+            group %= divisor
+            if n == 0:
+                zero_flag = True
+            else:
+                if zero_flag and group_text and not group_text.endswith("零"):
+                    group_text += "零"
+                zero_flag = False
+                group_text += digits[n] + units[pos]
+        text_parts.append(group_text + big_units[gi])
+    return f"{''.join(text_parts).rstrip('零')}圆整"
+
+
 def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
     task = db.query(InquiryTask).filter(InquiryTask.id == link.task_id).first()
     supplier = db.query(Supplier).filter(Supplier.id == link.supplier_id).first()
@@ -96,9 +190,11 @@ def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
         raise ValueError("未找到该成交供应商的报价数据")
 
     project_no = ""
+    project_name = ""
     buyer_name = "需方"
     items = []
     total_amount = Decimal("0")
+    total_qty = Decimal("0")
 
     for idx, q in enumerate(quotes, start=1):
         task_item = db.query(InquiryTaskItem).filter(InquiryTaskItem.id == q.item_id).first()
@@ -108,10 +204,13 @@ def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
         qty = _to_decimal(req.qty if req and req.qty is not None else q.qty)
         price = _to_decimal(q.price)
         amount = qty * price
+        total_qty += qty
         total_amount += amount
 
         if not project_no and req and req.project_info:
             project_no = str(req.project_info.get("number") or req.project_info.get("name") or "")
+        if not project_name and req and req.project_info:
+            project_name = str(req.project_info.get("name") or req.project_info.get("number") or "")
 
         items.append({
             "index": idx,
@@ -123,18 +222,21 @@ def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
         })
 
     return {
+        "contract_no": f"HT-{link.task_id}-{link.id}-{datetime.now().strftime('%Y%m%d')}",
         "supplier_name": supplier.name,
         "buyer_name": buyer_name,
         "project_no": project_no,
+        "project_name": project_name,
         "task_title": task.title,
         "items": items,
+        "total_qty": float(total_qty),
         "total_amount": float(total_amount),
     }
 
 
-def _fill_template_excel(payload: dict, output_xlsx: Path) -> None:
-    template_path = _resolve_template_path()
-    wb = load_workbook(template_path)
+def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path = None) -> None:
+    template_path = template_path or _resolve_template_path()
+    wb = _safe_load_workbook(template_path)
     if not wb.worksheets:
         normalized_template = _normalize_template_for_openpyxl(template_path)
         wb = load_workbook(normalized_template)
@@ -142,66 +244,158 @@ def _fill_template_excel(payload: dict, output_xlsx: Path) -> None:
         raise ValueError("模板文件不包含可写工作表")
     ws = wb.active if wb.active else wb.worksheets[0]
 
+    def resolve_cell_ref(cell_ref: str) -> str:
+        try:
+            cell = ws[cell_ref]
+            if isinstance(cell, MergedCell):
+                for merged_range in ws.merged_cells.ranges:
+                    if cell_ref in merged_range:
+                        return ws.cell(row=merged_range.min_row, column=merged_range.min_col).coordinate
+            return cell_ref
+        except Exception:
+            return cell_ref
+
     def set_cell_value(cell_ref: str, value):
-        cell = ws[cell_ref]
-        if isinstance(cell, MergedCell):
-            for merged_range in ws.merged_cells.ranges:
-                if cell_ref in merged_range:
-                    ws.cell(row=merged_range.min_row, column=merged_range.min_col, value=value)
-                    return
-        ws[cell_ref] = value
+        try:
+            target_ref = resolve_cell_ref(cell_ref)
+            ws[target_ref] = value
+        except Exception:
+            return
 
-    set_cell_value("C3", payload["supplier_name"])
-    set_cell_value("C4", payload["buyer_name"])
-    set_cell_value("C5", payload["project_no"] or payload["task_title"])
-    set_cell_value("F5", datetime.now().strftime("%Y-%m-%d"))
+    set_cell_value(TEMPLATE_CELLS["supplier_name"], payload.get("supplier_name", ""))
+    set_cell_value(TEMPLATE_CELLS["buyer_name"], payload.get("buyer_name", ""))
+    set_cell_value(TEMPLATE_CELLS["contract_no"], payload.get("contract_no", ""))
+    set_cell_value(TEMPLATE_CELLS["project_no"], payload.get("project_no") or payload.get("task_title", ""))
+    set_cell_value(TEMPLATE_CELLS["project_name"], payload.get("project_name") or payload.get("task_title", ""))
 
-    start_row = 8
-    for i, item in enumerate(payload["items"]):
-        row = start_row + i
-        set_cell_value(f"A{row}", item["index"])
-        set_cell_value(f"B{row}", item["material_name"])
-        set_cell_value(f"C{row}", item["material_code"])
-        set_cell_value(f"D{row}", item["qty"])
-        set_cell_value(f"E{row}", item["price"])
-        set_cell_value(f"F{row}", item["amount"])
-
-    set_cell_value("F20", payload["total_amount"])
+    total_amount = _to_decimal(payload.get("total_amount", 0))
+    total_qty = _to_decimal(payload.get("total_qty", 0))
+    set_cell_value(TEMPLATE_CELLS["total_amount_upper"], _to_chinese_upper_amount(total_amount))
+    set_cell_value(TEMPLATE_CELLS["total_qty"], float(total_qty))
+    set_cell_value(TEMPLATE_CELLS["total_amount"], float(total_amount))
 
     output_xlsx.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_xlsx)
 
 
-def _export_excel_to_pdf(xlsx_path: Path, output_pdf: Path) -> None:
-    try:
-        from win32com import client as win32
-    except Exception as exc:
-        raise RuntimeError("请先安装 pywin32，并在 Windows + Excel 环境下执行合同导出") from exc
+def _fill_template_to_temp_excel(payload: dict) -> Path:
+    template_path = _resolve_template_path()
+    temp_xlsx = CONTRACT_DIR / f"temp_filled_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}.xlsx"
+    _fill_template_excel(payload, temp_xlsx, template_path=template_path)
+    return temp_xlsx
+
+
+def _export_excel_to_pdf_with_win32(xlsx_path: Path, output_pdf: Path) -> bool:
+    pythoncom, win32 = _import_win32_modules()
+    if not pythoncom or not win32:
+        return False
 
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     excel = None
     workbook = None
     try:
+        pythoncom.CoInitialize()
         excel = win32.DispatchEx("Excel.Application")
         excel.Visible = False
         excel.DisplayAlerts = False
         workbook = excel.Workbooks.Open(str(xlsx_path.resolve()))
         workbook.ExportAsFixedFormat(0, str(output_pdf.resolve()))
+        return True
+    except Exception:
+        return False
     finally:
         if workbook is not None:
             workbook.Close(False)
         if excel is not None:
             excel.Quit()
+        if pythoncom is not None:
+            pythoncom.CoUninitialize()
+
+
+def _export_excel_to_pdf(xlsx_path: Path, output_pdf: Path) -> None:
+    if _export_excel_to_pdf_with_win32(xlsx_path, output_pdf):
+        return
+    _render_pdf_with_reportlab(xlsx_path, output_pdf)
+
+
+def _render_pdf_with_reportlab(xlsx_path: Path, output_pdf: Path) -> None:
+    wb = _safe_load_workbook(xlsx_path)
+    ws = wb.active if wb.active else wb.worksheets[0]
+    font_name = _register_pdf_font()
+
+    output_pdf.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(output_pdf.resolve()))
+    c.setPageSize((595, 842))
+    c.setFont(font_name, 11)
+
+    start_x = 40
+    y = 800
+    base_line_spacing = 20
+
+    c.setFont(font_name, 16)
+    c.drawString(start_x + 210, y, "采购合同")
+    y -= 32
+    c.setFont(font_name, 11)
+
+    header_refs = [
+        ("供方", TEMPLATE_CELLS["supplier_name"]),
+        ("需方", TEMPLATE_CELLS["buyer_name"]),
+        ("合同号", TEMPLATE_CELLS["contract_no"]),
+        ("项目号", TEMPLATE_CELLS["project_no"]),
+    ]
+    for label, ref in header_refs:
+        val = ws[ref].value if ws[ref].value is not None else ""
+        c.setFont(font_name, 11)
+        c.drawString(start_x, y, f"{label}：{val}")
+        y -= base_line_spacing
+
+    y -= 10
+    table_headers = ["序号", "物料名称", "物料编码", "数量", "单价", "金额"]
+    col_widths = [45, 150, 120, 70, 70, 80]
+    x = start_x
+    for i, h in enumerate(table_headers):
+        c.setFont(font_name, 11)
+        c.drawString(x, y, str(h))
+        x += col_widths[i]
+    y -= base_line_spacing
+
+    row = 8
+    while row <= ws.max_row and y > 80:
+        values = [
+            ws[f"A{row}"].value,
+            ws[f"B{row}"].value,
+            ws[f"C{row}"].value,
+            ws[f"D{row}"].value,
+            ws[f"E{row}"].value,
+            ws[f"F{row}"].value,
+        ]
+        if all(v in [None, ""] for v in values):
+            row += 1
+            continue
+        x = start_x
+        for i, v in enumerate(values):
+            c.setFont(font_name, 10)
+            c.drawString(x, y, "" if v is None else str(v))
+            x += col_widths[i]
+        row_height = ws.row_dimensions[row].height or 15
+        line_spacing = max(base_line_spacing, int(row_height + 4))
+        y -= line_spacing
+        row += 1
+
+    c.save()
 
 
 async def generate_contract_pdf(db: Session, inquiry_id: int) -> str:
     link = _resolve_deal_link(db, inquiry_id)
     payload = _collect_contract_payload(db, link)
 
-    output_xlsx = CONTRACT_DIR / f"合同_{inquiry_id}.xlsx"
     output_pdf = CONTRACT_DIR / f"合同_{inquiry_id}.pdf"
-    _fill_template_excel(payload, output_xlsx)
-    _export_excel_to_pdf(output_xlsx, output_pdf)
+    temp_xlsx = _fill_template_to_temp_excel(payload)
+    try:
+        _export_excel_to_pdf(temp_xlsx, output_pdf)
+    finally:
+        if temp_xlsx.exists():
+            temp_xlsx.unlink()
 
     static_pdf_path = f"/static/contracts/{output_pdf.name}"
     link.contract_pdf = static_pdf_path
@@ -215,6 +409,7 @@ async def generate_contract_pdf(db: Session, inquiry_id: int) -> str:
 
 async def generate_contract_pdf_from_mock_data(mock_data: dict, output_filename: str = "test_result.pdf") -> str:
     payload = {
+        "contract_no": mock_data.get("contract_no", f"TEST-{datetime.now().strftime('%Y%m%d%H%M%S')}"),
         "supplier_name": mock_data.get("supplier_name", ""),
         "buyer_name": mock_data.get("buyer_name", "需方"),
         "project_no": mock_data.get("project_no", ""),
@@ -223,7 +418,10 @@ async def generate_contract_pdf_from_mock_data(mock_data: dict, output_filename:
         "total_amount": float(mock_data.get("total_amount", 0)),
     }
     output_pdf = CONTRACT_DIR / output_filename
-    output_xlsx = CONTRACT_DIR / f"{output_pdf.stem}.xlsx"
-    _fill_template_excel(payload, output_xlsx)
-    _export_excel_to_pdf(output_xlsx, output_pdf)
+    temp_xlsx = _fill_template_to_temp_excel(payload)
+    try:
+        _export_excel_to_pdf(temp_xlsx, output_pdf)
+    finally:
+        if temp_xlsx.exists():
+            temp_xlsx.unlink()
     return str(output_pdf)
