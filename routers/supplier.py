@@ -187,6 +187,8 @@ def confirm_contract(
     link.bank_name = payload.bank_name
     link.bank_account = payload.bank_account
     link.tax_id = payload.tax_id
+    link.fax = payload.fax
+    link.postal_code = payload.postal_code
     db.add(link)
     db.commit()
     db.refresh(link)

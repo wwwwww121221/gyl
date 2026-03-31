@@ -30,6 +30,8 @@ def upgrade_db():
         cur.execute("ALTER TABLE inquiry_suppliers ADD COLUMN IF NOT EXISTS bank_name VARCHAR;")
         cur.execute("ALTER TABLE inquiry_suppliers ADD COLUMN IF NOT EXISTS bank_account VARCHAR;")
         cur.execute("ALTER TABLE inquiry_suppliers ADD COLUMN IF NOT EXISTS tax_id VARCHAR;")
+        cur.execute("ALTER TABLE inquiry_suppliers ADD COLUMN IF NOT EXISTS fax VARCHAR;")
+        cur.execute("ALTER TABLE inquiry_suppliers ADD COLUMN IF NOT EXISTS postal_code VARCHAR;")
         cur.execute("ALTER TABLE quotations ADD COLUMN IF NOT EXISTS qty DOUBLE PRECISION;")
         cur.execute("ALTER TABLE quotations ADD COLUMN IF NOT EXISTS delivery_date TIMESTAMP;")
         cur.execute("ALTER TABLE quotations ADD COLUMN IF NOT EXISTS remark TEXT;")

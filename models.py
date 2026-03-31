@@ -142,6 +142,8 @@ class InquirySupplier(Base):
     bank_name = Column(String, nullable=True)
     bank_account = Column(String, nullable=True)
     tax_id = Column(String, nullable=True)
+    fax = Column(String, nullable=True)
+    postal_code = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     task = relationship("InquiryTask", back_populates="suppliers")

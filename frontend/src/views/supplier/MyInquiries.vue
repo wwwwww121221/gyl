@@ -200,6 +200,12 @@
         <el-form-item label="税号" prop="tax_id">
           <el-input v-model="contractForm.tax_id" placeholder="请输入税号" />
         </el-form-item>
+        <el-form-item label="传真" prop="fax">
+          <el-input v-model="contractForm.fax" placeholder="请输入传真" />
+        </el-form-item>
+        <el-form-item label="邮编" prop="postal_code">
+          <el-input v-model="contractForm.postal_code" placeholder="请输入邮编" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -268,7 +274,9 @@ const contractForm = ref({
   phone: '',
   bank_name: '',
   bank_account: '',
-  tax_id: ''
+  tax_id: '',
+  fax: '',
+  postal_code: ''
 })
 const contractFormRules = {
   address: [{ required: true, message: '请输入地址', trigger: 'blur' }],
@@ -276,7 +284,9 @@ const contractFormRules = {
   phone: [{ required: true, message: '请输入联系电话', trigger: 'blur' }],
   bank_name: [{ required: true, message: '请输入开户银行', trigger: 'blur' }],
   bank_account: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  tax_id: [{ required: true, message: '请输入税号', trigger: 'blur' }]
+  tax_id: [{ required: true, message: '请输入税号', trigger: 'blur' }],
+  fax: [{ required: true, message: '请输入传真', trigger: 'blur' }],
+  postal_code: [{ required: true, message: '请输入邮编', trigger: 'blur' }]
 }
 const nowTs = ref(Date.now())
 let timerId = null
@@ -369,7 +379,8 @@ const handleViewContract = (row) => {
   const contractUrl = contractPath.startsWith('http')
     ? contractPath
     : `http://localhost:8000${contractPath}`
-  window.open(contractUrl, '_blank')
+  const cacheBypass = contractUrl.includes('?') ? '&_t=' : '?_t='
+  window.open(`${contractUrl}${cacheBypass}${Date.now()}`, '_blank')
 }
 
 const resetContractForm = () => {
@@ -380,7 +391,9 @@ const resetContractForm = () => {
     phone: '',
     bank_name: '',
     bank_account: '',
-    tax_id: ''
+    tax_id: '',
+    fax: '',
+    postal_code: ''
   }
 }
 

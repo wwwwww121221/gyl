@@ -31,3 +31,5 @@ class SupplierContractInfoSubmit(BaseModel):
     bank_name: str = Field(..., min_length=1)
     bank_account: str = Field(..., min_length=1)
     tax_id: str = Field(..., min_length=1)
+    fax: str = Field(..., min_length=1)
+    postal_code: str = Field(..., min_length=1)

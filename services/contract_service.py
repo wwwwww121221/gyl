@@ -32,13 +32,15 @@ DEFAULT_TEMPLATE_CELLS = {
     "total_amount_upper": "H9",
     "total_qty": "P9",
     "total_amount": "AA9",
-    "sup_address": "C20",
-    "sup_legal_rep": "C21",
-    "sup_agent": "C22",
-    "sup_phone": "C23",
-    "sup_bank_name": "C24",
-    "sup_bank_account": "C25",
-    "sup_tax_id": "C26",
+    "sup_address": "I27",
+    "sup_legal_rep": "I28",
+    "sup_agent": "I29",
+    "sup_phone": "I30",
+    "sup_bank_name": "I31",
+    "sup_bank_account": "I32",
+    "sup_tax_id": "I33",
+    "sup_fax": "I34",
+    "sup_postal_code": "I35",
 }
 TEMPLATE_DYNAMIC_RULES = {
     "supplier_name": ("供方", 0, 3),
@@ -266,7 +268,7 @@ def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
 
     project_no = ""
     project_name = ""
-    buyer_name = "需方"
+    buyer_name = "俊朗电气有限公司"
     items = []
     total_amount = Decimal("0")
     total_qty = Decimal("0")
@@ -313,6 +315,8 @@ def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
         "sup_bank_name": link.bank_name or "",
         "sup_bank_account": link.bank_account or "",
         "sup_tax_id": link.tax_id or "",
+        "sup_fax": link.fax or "",
+        "sup_postal_code": link.postal_code or "",
     }
 
 
@@ -362,15 +366,60 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
     set_cell_value(template_cells["contract_no"], payload.get("contract_no", ""))
     set_cell_value(template_cells["project_no"], payload.get("project_no") or payload.get("task_title", ""))
     items = payload.get("items", [])
-    row = 8
+    row = 42
+    max_item_row = ws.max_row
+    remark_row = None
+    for r in range(42, ws.max_row + 1):
+        marker = ws.cell(row=r, column=2).value
+        if isinstance(marker, str) and "备注" in marker:
+            remark_row = r
+            max_item_row = r - 1
+            break
+    if items and remark_row is not None:
+        current_capacity = max_item_row - row + 1
+        if current_capacity < 0:
+            current_capacity = 0
+        if len(items) > current_capacity:
+            extra_rows = len(items) - current_capacity
+            base_row_merges = []
+            for merged_range in ws.merged_cells.ranges:
+                if merged_range.min_row == row and merged_range.max_row == row:
+                    base_row_merges.append((merged_range.min_col, merged_range.max_col))
+            remark_merges = []
+            for merged_range in list(ws.merged_cells.ranges):
+                if merged_range.min_row == remark_row and merged_range.max_row == remark_row:
+                    remark_merges.append((merged_range.min_col, merged_range.max_col))
+                    ws.unmerge_cells(str(merged_range))
+            for col in range(1, ws.max_column + 1):
+                ws.cell(row=remark_row + extra_rows, column=col).value = ws.cell(row=remark_row, column=col).value
+                ws.cell(row=remark_row, column=col).value = None
+            for min_col, max_col in remark_merges:
+                ws.merge_cells(
+                    start_row=remark_row + extra_rows,
+                    start_column=min_col,
+                    end_row=remark_row + extra_rows,
+                    end_column=max_col
+                )
+            for r in range(row + 1, row + len(items)):
+                for min_col, max_col in base_row_merges:
+                    ws.merge_cells(
+                        start_row=r,
+                        start_column=min_col,
+                        end_row=r,
+                        end_column=max_col
+                    )
+            max_item_row = remark_row + extra_rows - 1
     for item in items:
+        if row > max_item_row:
+            break
         set_item_cell_value(row, 2, item.get("index"))
-        set_item_cell_value(row, 4, payload.get("project_no") or payload.get("task_title", ""))
-        set_item_cell_value(row, 10, item.get("material_name", ""))
-        set_item_cell_value(row, 13, item.get("material_code", ""))
-        set_item_cell_value(row, 16, item.get("qty", 0))
-        set_item_cell_value(row, 20, item.get("price", 0))
-        set_item_cell_value(row, 27, item.get("amount", 0))
+        set_item_cell_value(row, 3, payload.get("project_no") or payload.get("task_title", ""))
+        set_item_cell_value(row, 7, payload.get("project_name") or payload.get("task_title", ""))
+        set_item_cell_value(row, 9, item.get("material_name", ""))
+        set_item_cell_value(row, 11, item.get("material_code", ""))
+        set_item_cell_value(row, 15, item.get("qty", 0))
+        set_item_cell_value(row, 19, item.get("price", 0))
+        set_item_cell_value(row, 26, item.get("amount", 0))
         row += 1
     total_amount = _to_decimal(payload.get("total_amount", 0))
     total_qty = _to_decimal(payload.get("total_qty", 0))
@@ -384,6 +433,8 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
     set_cell_value(template_cells["sup_bank_name"], payload.get("sup_bank_name", ""))
     set_cell_value(template_cells["sup_bank_account"], payload.get("sup_bank_account", ""))
     set_cell_value(template_cells["sup_tax_id"], payload.get("sup_tax_id", ""))
+    set_cell_value(template_cells["sup_fax"], payload.get("sup_fax", ""))
+    set_cell_value(template_cells["sup_postal_code"], payload.get("sup_postal_code", ""))
 
     output_xlsx.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_xlsx)
@@ -404,33 +455,75 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
         workbook = excel.Workbooks.Open(str(template_path.resolve()))
         sheet = workbook.Worksheets(1)
         template_cells = _resolve_template_cells_for_win32(sheet)
-        sheet.Range(template_cells["supplier_name"]).Value = payload.get("supplier_name", "")
-        sheet.Range(template_cells["buyer_name"]).Value = payload.get("buyer_name", "")
-        sheet.Range(template_cells["contract_no"]).Value = payload.get("contract_no", "")
-        sheet.Range(template_cells["project_no"]).Value = payload.get("project_no") or payload.get("task_title", "")
+
+        def set_range_value(cell_ref: str, value):
+            try:
+                cell_range = sheet.Range(cell_ref)
+                if bool(cell_range.MergeCells):
+                    cell_range.MergeArea.Cells(1, 1).Value = value
+                else:
+                    cell_range.Value = value
+            except Exception:
+                return
+
+        def set_item_cell_value(row_idx: int, col_idx: int, value):
+            try:
+                cell = sheet.Cells(row_idx, col_idx)
+                if bool(cell.MergeCells):
+                    cell.MergeArea.Cells(1, 1).Value = value
+                else:
+                    cell.Value = value
+            except Exception:
+                return
+
+        set_range_value(template_cells["supplier_name"], payload.get("supplier_name", ""))
+        set_range_value(template_cells["buyer_name"], payload.get("buyer_name", ""))
+        set_range_value(template_cells["contract_no"], payload.get("contract_no", ""))
+        set_range_value(template_cells["project_no"], payload.get("project_no") or payload.get("task_title", ""))
         items = payload.get("items", [])
-        row = 8
+        row = 42
+        max_item_row = int(sheet.UsedRange.Rows.Count)
+        remark_row = None
+        for r in range(42, max_item_row + 1):
+            marker = sheet.Cells(r, 2).Value
+            if isinstance(marker, str) and "备注" in marker:
+                remark_row = r
+                max_item_row = r - 1
+                break
+        if items and remark_row is not None:
+            current_capacity = max_item_row - row + 1
+            if current_capacity < 0:
+                current_capacity = 0
+            if len(items) > current_capacity:
+                extra_rows = len(items) - current_capacity
+                sheet.Rows(f"{remark_row}:{remark_row + extra_rows - 1}").Insert()
+                max_item_row = remark_row + extra_rows - 1
         for item in items:
-            sheet.Cells(row, 2).Value = item.get("index")
-            sheet.Cells(row, 4).Value = payload.get("project_no") or payload.get("task_title", "")
-            sheet.Cells(row, 10).Value = item.get("material_name", "")
-            sheet.Cells(row, 13).Value = item.get("material_code", "")
-            sheet.Cells(row, 16).Value = item.get("qty", 0)
-            sheet.Cells(row, 20).Value = item.get("price", 0)
-            sheet.Cells(row, 27).Value = item.get("amount", 0)
+            if row > max_item_row:
+                break
+            set_item_cell_value(row, 2, item.get("index"))
+            set_item_cell_value(row, 3, payload.get("project_no") or payload.get("task_title", ""))
+            set_item_cell_value(row, 7, payload.get("project_name") or payload.get("task_title", ""))
+            set_item_cell_value(row, 9, item.get("material_name", ""))
+            set_item_cell_value(row, 11, item.get("material_code", ""))
+            set_item_cell_value(row, 15, item.get("qty", 0))
+            set_item_cell_value(row, 19, item.get("price", 0))
+            set_item_cell_value(row, 26, item.get("amount", 0))
             row += 1
         total_amount = _to_decimal(payload.get("total_amount", 0))
         total_qty = _to_decimal(payload.get("total_qty", 0))
-        sheet.Range(template_cells["total_amount_upper"]).Value = _to_chinese_upper_amount(total_amount)
-        sheet.Range(template_cells["total_qty"]).Value = float(total_qty)
-        sheet.Range(template_cells["total_amount"]).Value = float(total_amount)
-        sheet.Range(template_cells["sup_address"]).Value = payload.get("sup_address", "")
-        sheet.Range(template_cells["sup_legal_rep"]).Value = payload.get("sup_legal_rep", "")
-        sheet.Range(template_cells["sup_agent"]).Value = payload.get("sup_agent", "")
-        sheet.Range(template_cells["sup_phone"]).Value = payload.get("sup_phone", "")
-        sheet.Range(template_cells["sup_bank_name"]).Value = payload.get("sup_bank_name", "")
-        sheet.Range(template_cells["sup_bank_account"]).Value = payload.get("sup_bank_account", "")
-        sheet.Range(template_cells["sup_tax_id"]).Value = payload.get("sup_tax_id", "")
+        set_range_value(template_cells["total_amount_upper"], _to_chinese_upper_amount(total_amount))
+        set_range_value(template_cells["total_qty"], float(total_qty))
+        set_range_value(template_cells["total_amount"], float(total_amount))
+        set_range_value(template_cells["sup_address"], payload.get("sup_address", ""))
+        set_range_value(template_cells["sup_legal_rep"], payload.get("sup_legal_rep", ""))
+        set_range_value(template_cells["sup_agent"], payload.get("sup_agent", ""))
+        set_range_value(template_cells["sup_phone"], payload.get("sup_phone", ""))
+        set_range_value(template_cells["sup_bank_name"], payload.get("sup_bank_name", ""))
+        set_range_value(template_cells["sup_bank_account"], payload.get("sup_bank_account", ""))
+        set_range_value(template_cells["sup_tax_id"], payload.get("sup_tax_id", ""))
+        set_range_value(template_cells["sup_fax"], payload.get("sup_fax", ""))
+        set_range_value(template_cells["sup_postal_code"], payload.get("sup_postal_code", ""))
         output_xlsx.parent.mkdir(parents=True, exist_ok=True)
         workbook.SaveAs(str(output_xlsx.resolve()), FileFormat=51)
         return True
@@ -506,6 +599,28 @@ def _render_pdf_with_reportlab(xlsx_path: Path, output_pdf: Path) -> None:
     y -= 32
     c.setFont(font_name, 11)
 
+    def get_display_value_by_ref(cell_ref: str):
+        try:
+            cell = ws[cell_ref]
+            if isinstance(cell, MergedCell):
+                for merged_range in ws.merged_cells.ranges:
+                    if cell_ref in merged_range:
+                        return ws.cell(row=merged_range.min_row, column=merged_range.min_col).value
+            return cell.value
+        except Exception:
+            return ""
+
+    def get_display_value_by_pos(row_idx: int, col_idx: int):
+        try:
+            cell = ws.cell(row=row_idx, column=col_idx)
+            if isinstance(cell, MergedCell):
+                for merged_range in ws.merged_cells.ranges:
+                    if cell.coordinate in merged_range:
+                        return ws.cell(row=merged_range.min_row, column=merged_range.min_col).value
+            return cell.value
+        except Exception:
+            return ""
+
     header_refs = [
         ("供方", template_cells["supplier_name"]),
         ("需方", template_cells["buyer_name"]),
@@ -513,14 +628,31 @@ def _render_pdf_with_reportlab(xlsx_path: Path, output_pdf: Path) -> None:
         ("项目号", template_cells["project_no"]),
     ]
     for label, ref in header_refs:
-        val = ws[ref].value if ws[ref].value is not None else ""
+        val = get_display_value_by_ref(ref) or ""
         c.setFont(font_name, 11)
         c.drawString(start_x, y, f"{label}：{val}")
         y -= base_line_spacing
 
+    supplier_extra_refs = [
+        ("供方地址", template_cells["sup_address"]),
+        ("法定代表人", template_cells["sup_legal_rep"]),
+        ("委托代理人", template_cells["sup_agent"]),
+        ("联系电话", template_cells["sup_phone"]),
+        ("开户银行", template_cells["sup_bank_name"]),
+        ("账号", template_cells["sup_bank_account"]),
+        ("税号", template_cells["sup_tax_id"]),
+        ("传真", template_cells["sup_fax"]),
+        ("邮编", template_cells["sup_postal_code"]),
+    ]
+    for label, ref in supplier_extra_refs:
+        val = get_display_value_by_ref(ref) or ""
+        c.setFont(font_name, 10)
+        c.drawString(start_x, y, f"{label}：{val}")
+        y -= 16
+
     y -= 10
-    table_headers = ["序号", "物料名称", "物料编码", "数量", "单价", "金额"]
-    col_widths = [45, 150, 120, 70, 70, 80]
+    table_headers = ["序号", "项目号", "项目名称", "物料名称", "型号规格", "数量", "含税单价", "价税合计"]
+    col_widths = [32, 62, 75, 95, 95, 48, 68, 70]
     x = start_x
     for i, h in enumerate(table_headers):
         c.setFont(font_name, 11)
@@ -528,16 +660,20 @@ def _render_pdf_with_reportlab(xlsx_path: Path, output_pdf: Path) -> None:
         x += col_widths[i]
     y -= base_line_spacing
 
-    row = 8
+    row = 42
     while row <= ws.max_row and y > 80:
         values = [
-            ws[f"A{row}"].value,
-            ws[f"B{row}"].value,
-            ws[f"C{row}"].value,
-            ws[f"D{row}"].value,
-            ws[f"E{row}"].value,
-            ws[f"F{row}"].value,
+            get_display_value_by_pos(row, 2),
+            get_display_value_by_pos(row, 3),
+            get_display_value_by_pos(row, 7),
+            get_display_value_by_pos(row, 9),
+            get_display_value_by_pos(row, 11),
+            get_display_value_by_pos(row, 15),
+            get_display_value_by_pos(row, 19),
+            get_display_value_by_pos(row, 26),
         ]
+        if isinstance(values[0], str) and "备注" in values[0]:
+            break
         if all(v in [None, ""] for v in values):
             row += 1
             continue
