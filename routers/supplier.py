@@ -187,7 +187,9 @@ def confirm_contract(
     link.bank_name = payload.bank_name
     link.bank_account = payload.bank_account
     link.tax_id = payload.tax_id
+    db.add(link)
     db.commit()
+    db.refresh(link)
 
     background_tasks.add_task(_generate_contract_pdf_background, link.id)
     return {"message": "合同信息已提交，正在生成合同", "inquiry_id": link.id}
