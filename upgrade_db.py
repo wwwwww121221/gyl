@@ -21,6 +21,8 @@ def upgrade_db():
         cur.execute("ALTER TABLE inquiry_tasks ADD COLUMN IF NOT EXISTS strategy_config JSON;")
         cur.execute("ALTER TABLE inquiry_tasks ADD COLUMN IF NOT EXISTS deadline TIMESTAMP;")
         cur.execute("ALTER TABLE inquiry_suppliers ADD COLUMN IF NOT EXISTS latest_ai_feedback TEXT;")
+        cur.execute("ALTER TABLE inquiry_suppliers ADD COLUMN IF NOT EXISTS contract_pdf VARCHAR;")
+        cur.execute("ALTER TABLE inquiry_suppliers ADD COLUMN IF NOT EXISTS contract_pdf_path VARCHAR;")
         cur.execute("ALTER TABLE quotations ADD COLUMN IF NOT EXISTS qty DOUBLE PRECISION;")
         cur.execute("ALTER TABLE quotations ADD COLUMN IF NOT EXISTS delivery_date TIMESTAMP;")
         cur.execute("ALTER TABLE quotations ADD COLUMN IF NOT EXISTS remark TEXT;")

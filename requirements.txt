@@ -11,3 +11,6 @@ requests
 k3cloud-webapi-sdk
 bcrypt
 python-dotenv
+openpyxl
+reportlab
+pywin32

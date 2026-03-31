@@ -82,6 +82,24 @@ class InquiryTask(InquiryTaskBase):
     class Config:
         from_attributes = True
 
+class ContractBase(BaseModel):
+    task_id: int
+    inquiry_supplier_id: int
+    pdf_path: str
+    status: Optional[str] = "generated"
+    generated_by: Optional[int] = None
+
+class ContractCreate(ContractBase):
+    pass
+
+class Contract(ContractBase):
+    id: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
 # --- LLM Schemas ---
 
 class ChatMessage(BaseModel):

@@ -1,24 +1,38 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 from pydantic import BaseModel
 import uuid
+import asyncio
+import logging
 
 from models import (
-    get_db, User, InquiryRequest, InquiryTask, InquiryTaskItem, 
+    get_db, SessionLocal, User, InquiryRequest, InquiryTask, InquiryTaskItem, 
     Supplier, InquirySupplier, InquiryStatus, TaskStatus, LinkStatus
 )
 from schemas import InquiryTaskCreate, InquiryTask as InquiryTaskSchema, StrategyConfig, InquiryRequest as InquiryRequestSchema
 from routers.auth import oauth2_scheme, login_access_token # reuse auth but simpler dependency
+from services.contract_service import generate_contract_pdf
 
 # 简单的用户获取依赖
 from jose import jwt, JWTError
 from core.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 class ManualInterventionPayload(BaseModel):
     message: Optional[str] = None
+
+
+def _generate_contract_pdf_background(inquiry_id: int) -> None:
+    db = SessionLocal()
+    try:
+        asyncio.run(generate_contract_pdf(db, inquiry_id))
+    except Exception:
+        logger.exception("合同生成失败, inquiry_id=%s", inquiry_id)
+    finally:
+        db.close()
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
@@ -321,6 +335,7 @@ def delete_inquiry_task(
 def close_inquiry_task(
     task_id: int,
     selected_link_id: Optional[int] = None,
+    background_tasks: Optional[BackgroundTasks] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ) -> Any:
@@ -333,15 +348,22 @@ def close_inquiry_task(
         raise HTTPException(status_code=404, detail="Task not found")
 
     task.status = TaskStatus.CLOSED
+    selected_link = None
 
     for link in task.suppliers:
         if selected_link_id and link.id == selected_link_id:
             link.status = LinkStatus.DEAL
+            selected_link = link
         else:
             if link.status not in [LinkStatus.REJECT, LinkStatus.DEAL]:
                 link.status = LinkStatus.REJECT
 
+    if selected_link_id and not selected_link:
+        raise HTTPException(status_code=404, detail="Selected supplier link not found in this task")
+
     db.commit()
+    if selected_link and background_tasks:
+        background_tasks.add_task(_generate_contract_pdf_background, selected_link.id)
     return {"message": "Task closed successfully."}
 
 @router.post("/tasks/{task_id}/links/{link_id}/manual-continue")

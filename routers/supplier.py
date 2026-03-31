@@ -89,6 +89,8 @@ def get_my_inquiries(
             "status": link.status,
             "task_status": task.status,
             "current_round": link.current_round,
+            "contract_pdf": link.contract_pdf,
+            "contract_pdf_path": link.contract_pdf_path,
             "created_at": link.created_at
         })
         
@@ -136,6 +138,8 @@ def get_inquiry_details(
         "round": link.current_round,
         "status": link.status,
         "latest_ai_feedback": link.latest_ai_feedback,
+        "contract_pdf": link.contract_pdf,
+        "contract_pdf_path": link.contract_pdf_path,
         "items": items
     }
 

@@ -43,10 +43,19 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="150" align="center" fixed="right">
+          <el-table-column label="操作" width="240" align="center" fixed="right">
             <template #default="{ row }">
               <el-button size="small" type="primary" @click="handleDetail(row)">
                 查看详情 / 报价
+              </el-button>
+              <el-button
+                v-if="canViewContract(row)"
+                size="small"
+                type="success"
+                plain
+                @click="handleViewContract(row)"
+              >
+                查看合同
               </el-button>
             </template>
           </el-table-column>
@@ -271,6 +280,24 @@ const getStatusType = (status) => {
     reject: 'danger'
   }
   return map[status] || 'info'
+}
+
+const getContractPath = (row) => row.contract_pdf || row.contract_pdf_path || ''
+
+const canViewContract = (row) => {
+  return getDisplayStatus(row) === 'deal' && !!getContractPath(row)
+}
+
+const handleViewContract = (row) => {
+  const contractPath = getContractPath(row)
+  if (!contractPath) {
+    ElMessage.warning('合同文件尚未生成，请稍后重试')
+    return
+  }
+  const contractUrl = contractPath.startsWith('http')
+    ? contractPath
+    : `http://localhost:8000${contractPath}`
+  window.open(contractUrl, '_blank')
 }
 
 const formatDate = (row, column, cellValue) => {

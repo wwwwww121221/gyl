@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean, JSON, Enum
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean, JSON, Enum, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from datetime import datetime
@@ -88,6 +88,7 @@ class InquiryTask(Base):
     creator = relationship("User")
     items = relationship("InquiryTaskItem", back_populates="task")
     suppliers = relationship("InquirySupplier", back_populates="task")
+    contracts = relationship("Contract", back_populates="task")
 
 class InquiryTaskItem(Base):
     """
@@ -132,11 +133,14 @@ class InquirySupplier(Base):
     current_round = Column(Integer, default=1)
     status = Column(String, default=LinkStatus.SENT)
     latest_ai_feedback = Column(Text, nullable=True, comment="最新的AI谈判反馈")
+    contract_pdf = Column(String, nullable=True)
+    contract_pdf_path = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     task = relationship("InquiryTask", back_populates="suppliers")
     supplier = relationship("Supplier")
     quotations = relationship("Quotation", back_populates="inquiry_supplier")
+    contracts = relationship("Contract", back_populates="inquiry_supplier")
 
 class Quotation(Base):
     """
@@ -157,6 +161,23 @@ class Quotation(Base):
 
     inquiry_supplier = relationship("InquirySupplier", back_populates="quotations")
     item = relationship("InquiryTaskItem") # 关联到具体的任务明细项 (从而知道是对哪个物料报价)
+
+class Contract(Base):
+    __tablename__ = "contracts"
+    __table_args__ = (UniqueConstraint("inquiry_supplier_id", name="uq_contracts_inquiry_supplier_id"),)
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("inquiry_tasks.id"), nullable=False)
+    inquiry_supplier_id = Column(Integer, ForeignKey("inquiry_suppliers.id"), nullable=False)
+    pdf_path = Column(Text, nullable=False)
+    status = Column(String, default="generated")
+    generated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    task = relationship("InquiryTask", back_populates="contracts")
+    inquiry_supplier = relationship("InquirySupplier", back_populates="contracts")
+    generator = relationship("User")
 
 class SupplierMetric(Base):
     """
