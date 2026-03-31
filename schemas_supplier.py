@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
@@ -21,3 +21,13 @@ class SupplierQuoteResponse(BaseModel):
 class SupplierUpdate(BaseModel):
     status: Optional[str] = None
     level: Optional[str] = None
+
+
+class SupplierContractInfoSubmit(BaseModel):
+    address: str = Field(..., min_length=1)
+    legal_rep: str = Field(..., min_length=1)
+    agent: Optional[str] = None
+    phone: str = Field(..., min_length=1)
+    bank_name: str = Field(..., min_length=1)
+    bank_account: str = Field(..., min_length=1)
+    tax_id: str = Field(..., min_length=1)

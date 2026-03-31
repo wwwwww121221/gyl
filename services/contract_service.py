@@ -32,6 +32,13 @@ DEFAULT_TEMPLATE_CELLS = {
     "total_amount_upper": "H9",
     "total_qty": "P9",
     "total_amount": "AA9",
+    "sup_address": "C20",
+    "sup_legal_rep": "C21",
+    "sup_agent": "C22",
+    "sup_phone": "C23",
+    "sup_bank_name": "C24",
+    "sup_bank_account": "C25",
+    "sup_tax_id": "C26",
 }
 TEMPLATE_DYNAMIC_RULES = {
     "supplier_name": ("供方", 0, 3),
@@ -299,6 +306,13 @@ def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
         "items": items,
         "total_qty": float(total_qty),
         "total_amount": float(total_amount),
+        "sup_address": link.address or "",
+        "sup_legal_rep": link.legal_rep or "",
+        "sup_agent": link.agent or "",
+        "sup_phone": link.phone or "",
+        "sup_bank_name": link.bank_name or "",
+        "sup_bank_account": link.bank_account or "",
+        "sup_tax_id": link.tax_id or "",
     }
 
 
@@ -331,15 +345,45 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
         except Exception:
             return
 
+    def set_item_cell_value(row_idx: int, col_idx: int, value):
+        try:
+            cell = ws.cell(row=row_idx, column=col_idx)
+            if isinstance(cell, MergedCell):
+                for merged_range in ws.merged_cells.ranges:
+                    if cell.coordinate in merged_range:
+                        ws.cell(row=merged_range.min_row, column=merged_range.min_col).value = value
+                        return
+            ws.cell(row=row_idx, column=col_idx).value = value
+        except Exception:
+            return
+
     set_cell_value(template_cells["supplier_name"], payload.get("supplier_name", ""))
     set_cell_value(template_cells["buyer_name"], payload.get("buyer_name", ""))
     set_cell_value(template_cells["contract_no"], payload.get("contract_no", ""))
     set_cell_value(template_cells["project_no"], payload.get("project_no") or payload.get("task_title", ""))
+    items = payload.get("items", [])
+    row = 8
+    for item in items:
+        set_item_cell_value(row, 2, item.get("index"))
+        set_item_cell_value(row, 4, payload.get("project_no") or payload.get("task_title", ""))
+        set_item_cell_value(row, 10, item.get("material_name", ""))
+        set_item_cell_value(row, 13, item.get("material_code", ""))
+        set_item_cell_value(row, 16, item.get("qty", 0))
+        set_item_cell_value(row, 20, item.get("price", 0))
+        set_item_cell_value(row, 27, item.get("amount", 0))
+        row += 1
     total_amount = _to_decimal(payload.get("total_amount", 0))
     total_qty = _to_decimal(payload.get("total_qty", 0))
     set_cell_value(template_cells["total_amount_upper"], _to_chinese_upper_amount(total_amount))
     set_cell_value(template_cells["total_qty"], float(total_qty))
     set_cell_value(template_cells["total_amount"], float(total_amount))
+    set_cell_value(template_cells["sup_address"], payload.get("sup_address", ""))
+    set_cell_value(template_cells["sup_legal_rep"], payload.get("sup_legal_rep", ""))
+    set_cell_value(template_cells["sup_agent"], payload.get("sup_agent", ""))
+    set_cell_value(template_cells["sup_phone"], payload.get("sup_phone", ""))
+    set_cell_value(template_cells["sup_bank_name"], payload.get("sup_bank_name", ""))
+    set_cell_value(template_cells["sup_bank_account"], payload.get("sup_bank_account", ""))
+    set_cell_value(template_cells["sup_tax_id"], payload.get("sup_tax_id", ""))
 
     output_xlsx.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_xlsx)
@@ -364,11 +408,29 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
         sheet.Range(template_cells["buyer_name"]).Value = payload.get("buyer_name", "")
         sheet.Range(template_cells["contract_no"]).Value = payload.get("contract_no", "")
         sheet.Range(template_cells["project_no"]).Value = payload.get("project_no") or payload.get("task_title", "")
+        items = payload.get("items", [])
+        row = 8
+        for item in items:
+            sheet.Cells(row, 2).Value = item.get("index")
+            sheet.Cells(row, 4).Value = payload.get("project_no") or payload.get("task_title", "")
+            sheet.Cells(row, 10).Value = item.get("material_name", "")
+            sheet.Cells(row, 13).Value = item.get("material_code", "")
+            sheet.Cells(row, 16).Value = item.get("qty", 0)
+            sheet.Cells(row, 20).Value = item.get("price", 0)
+            sheet.Cells(row, 27).Value = item.get("amount", 0)
+            row += 1
         total_amount = _to_decimal(payload.get("total_amount", 0))
         total_qty = _to_decimal(payload.get("total_qty", 0))
         sheet.Range(template_cells["total_amount_upper"]).Value = _to_chinese_upper_amount(total_amount)
         sheet.Range(template_cells["total_qty"]).Value = float(total_qty)
         sheet.Range(template_cells["total_amount"]).Value = float(total_amount)
+        sheet.Range(template_cells["sup_address"]).Value = payload.get("sup_address", "")
+        sheet.Range(template_cells["sup_legal_rep"]).Value = payload.get("sup_legal_rep", "")
+        sheet.Range(template_cells["sup_agent"]).Value = payload.get("sup_agent", "")
+        sheet.Range(template_cells["sup_phone"]).Value = payload.get("sup_phone", "")
+        sheet.Range(template_cells["sup_bank_name"]).Value = payload.get("sup_bank_name", "")
+        sheet.Range(template_cells["sup_bank_account"]).Value = payload.get("sup_bank_account", "")
+        sheet.Range(template_cells["sup_tax_id"]).Value = payload.get("sup_tax_id", "")
         output_xlsx.parent.mkdir(parents=True, exist_ok=True)
         workbook.SaveAs(str(output_xlsx.resolve()), FileFormat=51)
         return True

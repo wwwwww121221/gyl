@@ -135,6 +135,13 @@ class InquirySupplier(Base):
     latest_ai_feedback = Column(Text, nullable=True, comment="最新的AI谈判反馈")
     contract_pdf = Column(String, nullable=True)
     contract_pdf_path = Column(String, nullable=True)
+    address = Column(String, nullable=True)
+    legal_rep = Column(String, nullable=True)
+    agent = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    bank_name = Column(String, nullable=True)
+    bank_account = Column(String, nullable=True)
+    tax_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     task = relationship("InquiryTask", back_populates="suppliers")

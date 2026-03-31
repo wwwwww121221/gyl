@@ -43,19 +43,27 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="240" align="center" fixed="right">
+          <el-table-column label="操作" width="320" align="center" fixed="right">
             <template #default="{ row }">
               <el-button size="small" type="primary" @click="handleDetail(row)">
                 查看详情 / 报价
               </el-button>
               <el-button
-                v-if="canViewContract(row)"
+                v-if="canFillContract(row)"
+                size="small"
+                type="primary"
+                @click="handleOpenContractForm(row)"
+              >
+                填写合同信息
+              </el-button>
+              <el-button
+                v-else-if="canViewContract(row)"
                 size="small"
                 type="success"
                 plain
                 @click="handleViewContract(row)"
               >
-                查看合同
+                下载/查看合同
               </el-button>
             </template>
           </el-table-column>
@@ -163,6 +171,45 @@
         </span>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="contractDialogVisible"
+      title="填写合同信息"
+      width="620px"
+      destroy-on-close
+    >
+      <el-form ref="contractFormRef" :model="contractForm" :rules="contractFormRules" label-width="110px">
+        <el-form-item label="地址" prop="address">
+          <el-input v-model="contractForm.address" placeholder="请输入地址" />
+        </el-form-item>
+        <el-form-item label="法定代表人" prop="legal_rep">
+          <el-input v-model="contractForm.legal_rep" placeholder="请输入法定代表人" />
+        </el-form-item>
+        <el-form-item label="委托代理人" prop="agent">
+          <el-input v-model="contractForm.agent" placeholder="请输入委托代理人（选填）" />
+        </el-form-item>
+        <el-form-item label="联系电话" prop="phone">
+          <el-input v-model="contractForm.phone" placeholder="请输入联系电话" />
+        </el-form-item>
+        <el-form-item label="开户银行" prop="bank_name">
+          <el-input v-model="contractForm.bank_name" placeholder="请输入开户银行" />
+        </el-form-item>
+        <el-form-item label="账号" prop="bank_account">
+          <el-input v-model="contractForm.bank_account" placeholder="请输入账号" />
+        </el-form-item>
+        <el-form-item label="税号" prop="tax_id">
+          <el-input v-model="contractForm.tax_id" placeholder="请输入税号" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="contractDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="contractSubmitLoading" @click="submitContractInfo">
+            提交
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -210,6 +257,27 @@ const currentInquiry = ref(null)
 const quoteForm = ref({})
 const submitLoading = ref(false)
 const currentLinkId = ref(null)
+const confirmInquiryId = ref(null)
+const contractDialogVisible = ref(false)
+const contractSubmitLoading = ref(false)
+const contractFormRef = ref()
+const contractForm = ref({
+  address: '',
+  legal_rep: '',
+  agent: '',
+  phone: '',
+  bank_name: '',
+  bank_account: '',
+  tax_id: ''
+})
+const contractFormRules = {
+  address: [{ required: true, message: '请输入地址', trigger: 'blur' }],
+  legal_rep: [{ required: true, message: '请输入法定代表人', trigger: 'blur' }],
+  phone: [{ required: true, message: '请输入联系电话', trigger: 'blur' }],
+  bank_name: [{ required: true, message: '请输入开户银行', trigger: 'blur' }],
+  bank_account: [{ required: true, message: '请输入账号', trigger: 'blur' }],
+  tax_id: [{ required: true, message: '请输入税号', trigger: 'blur' }]
+}
 const nowTs = ref(Date.now())
 let timerId = null
 
@@ -288,6 +356,10 @@ const canViewContract = (row) => {
   return getDisplayStatus(row) === 'deal' && !!getContractPath(row)
 }
 
+const canFillContract = (row) => {
+  return getDisplayStatus(row) === 'deal' && !getContractPath(row)
+}
+
 const handleViewContract = (row) => {
   const contractPath = getContractPath(row)
   if (!contractPath) {
@@ -298,6 +370,45 @@ const handleViewContract = (row) => {
     ? contractPath
     : `http://localhost:8000${contractPath}`
   window.open(contractUrl, '_blank')
+}
+
+const resetContractForm = () => {
+  contractForm.value = {
+    address: '',
+    legal_rep: '',
+    agent: '',
+    phone: '',
+    bank_name: '',
+    bank_account: '',
+    tax_id: ''
+  }
+}
+
+const handleOpenContractForm = (row) => {
+  confirmInquiryId.value = row.inquiry_supplier_id
+  resetContractForm()
+  contractDialogVisible.value = true
+}
+
+const submitContractInfo = async () => {
+  if (!confirmInquiryId.value) return
+  try {
+    await contractFormRef.value.validate()
+  } catch {
+    return
+  }
+  contractSubmitLoading.value = true
+  try {
+    await api.post(`/supplier/inquiries/${confirmInquiryId.value}/confirm-contract`, contractForm.value)
+    contractDialogVisible.value = false
+    ElMessage.success('合同正在生成中')
+    fetchInquiries()
+  } catch (error) {
+    console.error(error)
+    ElMessage.error(error.response?.data?.detail || '提交失败')
+  } finally {
+    contractSubmitLoading.value = false
+  }
 }
 
 const formatDate = (row, column, cellValue) => {

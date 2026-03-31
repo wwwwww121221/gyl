@@ -1,14 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import Any
 from datetime import datetime
+import asyncio
 
 from models import (
-    get_db, InquirySupplier, InquiryTaskItem, 
+    get_db, SessionLocal, InquirySupplier, InquiryTaskItem,
     Quotation, LinkStatus, InquiryRequest, TaskStatus, InquiryTask, Supplier, User
 )
-from schemas_supplier import QuoteSubmission, SupplierQuoteResponse, SupplierUpdate
+from schemas_supplier import QuoteSubmission, SupplierQuoteResponse, SupplierUpdate, SupplierContractInfoSubmit
 from services.llm_factory import get_llm_service
+from services.contract_service import generate_contract_pdf
 from schemas import ChatMessage
 import logging
 from routers.inquiry import get_current_user
@@ -16,6 +18,16 @@ from routers.inquiry import get_current_user
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _generate_contract_pdf_background(inquiry_id: int) -> None:
+    db = SessionLocal()
+    try:
+        asyncio.run(generate_contract_pdf(db, inquiry_id))
+    except Exception:
+        logger.exception("合同生成失败, inquiry_id=%s", inquiry_id)
+    finally:
+        db.close()
 
 @router.get("/list")
 def get_supplier_list(db: Session = Depends(get_db)):
@@ -142,6 +154,43 @@ def get_inquiry_details(
         "contract_pdf_path": link.contract_pdf_path,
         "items": items
     }
+
+
+@router.post("/inquiries/{inquiry_id}/confirm-contract")
+def confirm_contract(
+    inquiry_id: int,
+    payload: SupplierContractInfoSubmit,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    if current_user.role != "supplier":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+
+    link = db.query(InquirySupplier).filter(
+        InquirySupplier.id == inquiry_id,
+        InquirySupplier.supplier_id == supplier.id
+    ).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Inquiry not found")
+    if link.status != LinkStatus.DEAL:
+        raise HTTPException(status_code=400, detail="Only deal inquiry can confirm contract")
+
+    link.address = payload.address
+    link.legal_rep = payload.legal_rep
+    link.agent = payload.agent
+    link.phone = payload.phone
+    link.bank_name = payload.bank_name
+    link.bank_account = payload.bank_account
+    link.tax_id = payload.tax_id
+    db.commit()
+
+    background_tasks.add_task(_generate_contract_pdf_background, link.id)
+    return {"message": "合同信息已提交，正在生成合同", "inquiry_id": link.id}
 
 @router.post("/inquiry/{inquiry_supplier_id}/quote", response_model=SupplierQuoteResponse)
 async def submit_quote(
