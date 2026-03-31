@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
+from openpyxl.utils import get_column_letter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
@@ -23,15 +24,23 @@ FONT_DIR = BASE_DIR / "static" / "fonts"
 SIMSUN_PATH = FONT_DIR / "SimSun.ttf"
 SYSTEM_SIMSUN_PATH = Path("C:/Windows/Fonts/simsun.ttc")
 os.makedirs("static/contracts", exist_ok=True)
-TEMPLATE_CELLS = {
+DEFAULT_TEMPLATE_CELLS = {
     "supplier_name": "E3",
     "buyer_name": "E4",
-    "contract_no": "L3",
+    "contract_no": "V3",
     "project_no": "F6",
-    "project_name": "H7",
     "total_amount_upper": "H9",
     "total_qty": "P9",
     "total_amount": "AA9",
+}
+TEMPLATE_DYNAMIC_RULES = {
+    "supplier_name": ("供方", 0, 3),
+    "buyer_name": ("需方", 0, 3),
+    "contract_no": ("合同号", 0, 4),
+    "project_no": ("项目号", 0, 4),
+    "total_amount_upper": ("合计人民币金额(大写)", 0, 6),
+    "total_qty": ("数量", 2, 0),
+    "total_amount": ("价税合计", 2, 0),
 }
 
 
@@ -46,6 +55,65 @@ def _resolve_template_path() -> Path:
         if p.exists():
             return p
     raise FileNotFoundError("合同模板文件不存在，请将‘合同模版.xlsx’放入 static/templates 目录")
+
+
+def _normalize_text(value) -> str:
+    return str(value or "").replace("：", ":").replace("\n", "").replace(" ", "").strip()
+
+
+def _find_label_cell_openpyxl(ws, label: str, max_row: int = 20, max_col: int = 40):
+    target = _normalize_text(label)
+    row_limit = min(ws.max_row, max_row)
+    col_limit = min(ws.max_column, max_col)
+    for row_idx in range(1, row_limit + 1):
+        for col_idx in range(1, col_limit + 1):
+            current = _normalize_text(ws.cell(row_idx, col_idx).value)
+            if not current:
+                continue
+            if target in current:
+                return row_idx, col_idx
+    return None
+
+
+def _resolve_template_cells_for_openpyxl(ws) -> dict:
+    template_cells = dict(DEFAULT_TEMPLATE_CELLS)
+    for key, (label, row_offset, col_offset) in TEMPLATE_DYNAMIC_RULES.items():
+        found = _find_label_cell_openpyxl(ws, label)
+        if not found:
+            continue
+        row_idx = found[0] + row_offset
+        col_idx = found[1] + col_offset
+        if row_idx < 1 or col_idx < 1:
+            continue
+        template_cells[key] = f"{get_column_letter(col_idx)}{row_idx}"
+    return template_cells
+
+
+def _resolve_template_cells_for_win32(sheet) -> dict:
+    template_cells = dict(DEFAULT_TEMPLATE_CELLS)
+    row_limit = min(getattr(sheet.UsedRange, "Rows", sheet.UsedRange).Count, 20)
+    col_limit = min(getattr(sheet.UsedRange, "Columns", sheet.UsedRange).Count, 40)
+    label_positions = {}
+    for row_idx in range(1, row_limit + 1):
+        for col_idx in range(1, col_limit + 1):
+            value = _normalize_text(sheet.Cells(row_idx, col_idx).Value)
+            if not value:
+                continue
+            for _, (label, _, _) in TEMPLATE_DYNAMIC_RULES.items():
+                if label in label_positions:
+                    continue
+                if _normalize_text(label) in value:
+                    label_positions[label] = (row_idx, col_idx)
+    for key, (label, row_offset, col_offset) in TEMPLATE_DYNAMIC_RULES.items():
+        found = label_positions.get(label)
+        if not found:
+            continue
+        row_idx = found[0] + row_offset
+        col_idx = found[1] + col_offset
+        if row_idx < 1 or col_idx < 1:
+            continue
+        template_cells[key] = f"{get_column_letter(col_idx)}{row_idx}"
+    return template_cells
 
 
 def _register_pdf_font() -> str:
@@ -243,6 +311,7 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
     if not wb.worksheets:
         raise ValueError("模板文件不包含可写工作表")
     ws = wb.active if wb.active else wb.worksheets[0]
+    template_cells = _resolve_template_cells_for_openpyxl(ws)
 
     def resolve_cell_ref(cell_ref: str) -> str:
         try:
@@ -262,26 +331,63 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
         except Exception:
             return
 
-    set_cell_value(TEMPLATE_CELLS["supplier_name"], payload.get("supplier_name", ""))
-    set_cell_value(TEMPLATE_CELLS["buyer_name"], payload.get("buyer_name", ""))
-    set_cell_value(TEMPLATE_CELLS["contract_no"], payload.get("contract_no", ""))
-    set_cell_value(TEMPLATE_CELLS["project_no"], payload.get("project_no") or payload.get("task_title", ""))
-    set_cell_value(TEMPLATE_CELLS["project_name"], payload.get("project_name") or payload.get("task_title", ""))
-
+    set_cell_value(template_cells["supplier_name"], payload.get("supplier_name", ""))
+    set_cell_value(template_cells["buyer_name"], payload.get("buyer_name", ""))
+    set_cell_value(template_cells["contract_no"], payload.get("contract_no", ""))
+    set_cell_value(template_cells["project_no"], payload.get("project_no") or payload.get("task_title", ""))
     total_amount = _to_decimal(payload.get("total_amount", 0))
     total_qty = _to_decimal(payload.get("total_qty", 0))
-    set_cell_value(TEMPLATE_CELLS["total_amount_upper"], _to_chinese_upper_amount(total_amount))
-    set_cell_value(TEMPLATE_CELLS["total_qty"], float(total_qty))
-    set_cell_value(TEMPLATE_CELLS["total_amount"], float(total_amount))
+    set_cell_value(template_cells["total_amount_upper"], _to_chinese_upper_amount(total_amount))
+    set_cell_value(template_cells["total_qty"], float(total_qty))
+    set_cell_value(template_cells["total_amount"], float(total_amount))
 
     output_xlsx.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_xlsx)
 
 
-def _fill_template_to_temp_excel(payload: dict) -> Path:
+def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
+    pythoncom, win32 = _import_win32_modules()
+    if not pythoncom or not win32:
+        return False
     template_path = _resolve_template_path()
+    excel = None
+    workbook = None
+    try:
+        pythoncom.CoInitialize()
+        excel = win32.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        workbook = excel.Workbooks.Open(str(template_path.resolve()))
+        sheet = workbook.Worksheets(1)
+        template_cells = _resolve_template_cells_for_win32(sheet)
+        sheet.Range(template_cells["supplier_name"]).Value = payload.get("supplier_name", "")
+        sheet.Range(template_cells["buyer_name"]).Value = payload.get("buyer_name", "")
+        sheet.Range(template_cells["contract_no"]).Value = payload.get("contract_no", "")
+        sheet.Range(template_cells["project_no"]).Value = payload.get("project_no") or payload.get("task_title", "")
+        total_amount = _to_decimal(payload.get("total_amount", 0))
+        total_qty = _to_decimal(payload.get("total_qty", 0))
+        sheet.Range(template_cells["total_amount_upper"]).Value = _to_chinese_upper_amount(total_amount)
+        sheet.Range(template_cells["total_qty"]).Value = float(total_qty)
+        sheet.Range(template_cells["total_amount"]).Value = float(total_amount)
+        output_xlsx.parent.mkdir(parents=True, exist_ok=True)
+        workbook.SaveAs(str(output_xlsx.resolve()), FileFormat=51)
+        return True
+    except Exception:
+        return False
+    finally:
+        if workbook is not None:
+            workbook.Close(False)
+        if excel is not None:
+            excel.Quit()
+        if pythoncom is not None:
+            pythoncom.CoUninitialize()
+
+
+def _fill_template_to_temp_excel(payload: dict) -> Path:
     temp_xlsx = CONTRACT_DIR / f"temp_filled_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}.xlsx"
-    _fill_template_excel(payload, temp_xlsx, template_path=template_path)
+    if not _fill_template_excel_with_win32(payload, temp_xlsx):
+        template_path = _resolve_template_path()
+        _fill_template_excel(payload, temp_xlsx, template_path=template_path)
     return temp_xlsx
 
 
@@ -321,6 +427,7 @@ def _export_excel_to_pdf(xlsx_path: Path, output_pdf: Path) -> None:
 def _render_pdf_with_reportlab(xlsx_path: Path, output_pdf: Path) -> None:
     wb = _safe_load_workbook(xlsx_path)
     ws = wb.active if wb.active else wb.worksheets[0]
+    template_cells = _resolve_template_cells_for_openpyxl(ws)
     font_name = _register_pdf_font()
 
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
@@ -338,10 +445,10 @@ def _render_pdf_with_reportlab(xlsx_path: Path, output_pdf: Path) -> None:
     c.setFont(font_name, 11)
 
     header_refs = [
-        ("供方", TEMPLATE_CELLS["supplier_name"]),
-        ("需方", TEMPLATE_CELLS["buyer_name"]),
-        ("合同号", TEMPLATE_CELLS["contract_no"]),
-        ("项目号", TEMPLATE_CELLS["project_no"]),
+        ("供方", template_cells["supplier_name"]),
+        ("需方", template_cells["buyer_name"]),
+        ("合同号", template_cells["contract_no"]),
+        ("项目号", template_cells["project_no"]),
     ]
     for label, ref in header_refs:
         val = ws[ref].value if ws[ref].value is not None else ""
