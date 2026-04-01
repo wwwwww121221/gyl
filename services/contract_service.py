@@ -346,19 +346,23 @@ def _collect_contract_payload(
         req = db.query(InquiryRequest).filter(InquiryRequest.id == task_item.request_id).first() if task_item else None
         material_name = req.material_name if req else ""
         material_code = req.material_code if req else ""
+        item_project_no = str(req.project_info.get("number") or req.project_info.get("name") or "") if req and req.project_info else ""
+        item_project_name = str(req.project_info.get("name") or req.project_info.get("number") or "") if req and req.project_info else ""
         qty = _to_decimal(req.qty if req and req.qty is not None else q.qty)
         price = _to_decimal(q.price)
         amount = qty * price
         total_qty += qty
         total_amount += amount
 
-        if not project_no and req and req.project_info:
-            project_no = str(req.project_info.get("number") or req.project_info.get("name") or "")
-        if not project_name and req and req.project_info:
-            project_name = str(req.project_info.get("name") or req.project_info.get("number") or "")
+        if not project_no and item_project_no:
+            project_no = item_project_no
+        if not project_name and item_project_name:
+            project_name = item_project_name
 
         items.append({
             "index": idx,
+            "project_no": item_project_no,
+            "project_name": item_project_name,
             "material_name": material_name,
             "material_code": material_code,
             "qty": float(qty),
@@ -537,8 +541,8 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
     for item in items:
         if row > max_item_row:
             break
-        item_project_no = payload.get("project_no") or payload.get("task_title", "")
-        item_project_name = payload.get("project_name") or payload.get("task_title", "")
+        item_project_no = item.get("project_no") or payload.get("project_no") or payload.get("task_title", "")
+        item_project_name = item.get("project_name") or payload.get("project_name") or payload.get("task_title", "")
         item_material_name = item.get("material_name", "")
         item_material_code = item.get("material_code", "")
         item_delivery_date = item.get("delivery_date", "")
@@ -648,8 +652,8 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
         for item in items:
             if row > max_item_row:
                 break
-            item_project_no = payload.get("project_no") or payload.get("task_title", "")
-            item_project_name = payload.get("project_name") or payload.get("task_title", "")
+            item_project_no = item.get("project_no") or payload.get("project_no") or payload.get("task_title", "")
+            item_project_name = item.get("project_name") or payload.get("project_name") or payload.get("task_title", "")
             item_material_name = item.get("material_name", "")
             item_material_code = item.get("material_code", "")
             item_delivery_date = item.get("delivery_date", "")
