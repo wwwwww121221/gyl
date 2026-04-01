@@ -1,5 +1,6 @@
 import os
 import warnings
+from copy import copy
 from datetime import datetime
 from pathlib import Path
 from decimal import Decimal
@@ -211,6 +212,22 @@ def _to_decimal(val) -> Decimal:
     return Decimal(str(val))
 
 
+def _format_delivery_date(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    text = str(value).strip()
+    if not text:
+        return ""
+    return text[:10]
+
+
 def _to_chinese_upper_amount(amount: Decimal) -> str:
     digits = "零壹贰叁肆伍陆柒捌玖"
     units = ["", "拾", "佰", "仟"]
@@ -296,6 +313,7 @@ def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
             "qty": float(qty),
             "price": float(price),
             "amount": float(amount),
+            "delivery_date": _format_delivery_date(q.delivery_date or (req.delivery_date if req else None)),
         })
 
     return {
@@ -361,6 +379,23 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
         except Exception:
             return
 
+    def clone_row_style(source_row: int, target_row: int):
+        try:
+            ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
+            for col in range(1, ws.max_column + 1):
+                source_cell = ws.cell(row=source_row, column=col)
+                target_cell = ws.cell(row=target_row, column=col)
+                if source_cell.has_style:
+                    target_cell._style = copy(source_cell._style)
+                if source_cell.number_format:
+                    target_cell.number_format = source_cell.number_format
+                if source_cell.protection:
+                    target_cell.protection = copy(source_cell.protection)
+                if source_cell.alignment:
+                    target_cell.alignment = copy(source_cell.alignment)
+        except Exception:
+            return
+
     set_cell_value(template_cells["supplier_name"], payload.get("supplier_name", ""))
     set_cell_value(template_cells["buyer_name"], payload.get("buyer_name", ""))
     set_cell_value(template_cells["contract_no"], payload.get("contract_no", ""))
@@ -379,36 +414,63 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
         current_capacity = max_item_row - row + 1
         if current_capacity < 0:
             current_capacity = 0
-        if len(items) > current_capacity:
-            extra_rows = len(items) - current_capacity
-            base_row_merges = []
+        remark_row_height = ws.row_dimensions[remark_row].height
+        remark_row_values = {}
+        for col in range(1, ws.max_column + 1):
+            value = ws.cell(row=remark_row, column=col).value
+            if value not in (None, ""):
+                remark_row_values[col] = value
+        remark_row_merges = []
+        for merged_range in ws.merged_cells.ranges:
+            if merged_range.min_row == remark_row and merged_range.max_row == remark_row:
+                remark_row_merges.append((merged_range.min_col, merged_range.max_col))
+        base_row_merges = []
+        if current_capacity > 0:
             for merged_range in ws.merged_cells.ranges:
                 if merged_range.min_row == row and merged_range.max_row == row:
                     base_row_merges.append((merged_range.min_col, merged_range.max_col))
-            remark_merges = []
+
+        def reset_item_row_structure(target_row: int):
+            clone_row_style(row, target_row)
             for merged_range in list(ws.merged_cells.ranges):
-                if merged_range.min_row == remark_row and merged_range.max_row == remark_row:
-                    remark_merges.append((merged_range.min_col, merged_range.max_col))
+                if merged_range.min_row == target_row and merged_range.max_row == target_row:
                     ws.unmerge_cells(str(merged_range))
-            for col in range(1, ws.max_column + 1):
-                ws.cell(row=remark_row + extra_rows, column=col).value = ws.cell(row=remark_row, column=col).value
-                ws.cell(row=remark_row, column=col).value = None
-            for min_col, max_col in remark_merges:
+            for min_col, max_col in base_row_merges:
                 ws.merge_cells(
-                    start_row=remark_row + extra_rows,
+                    start_row=target_row,
                     start_column=min_col,
-                    end_row=remark_row + extra_rows,
+                    end_row=target_row,
                     end_column=max_col
                 )
-            for r in range(row + 1, row + len(items)):
-                for min_col, max_col in base_row_merges:
-                    ws.merge_cells(
-                        start_row=r,
-                        start_column=min_col,
-                        end_row=r,
-                        end_column=max_col
-                    )
+
+        def reset_remark_row_structure(target_row: int):
+            for merged_range in list(ws.merged_cells.ranges):
+                if merged_range.min_row == target_row and merged_range.max_row == target_row:
+                    ws.unmerge_cells(str(merged_range))
+            ws.row_dimensions[target_row].height = remark_row_height
+            for min_col, max_col in remark_row_merges:
+                ws.merge_cells(
+                    start_row=target_row,
+                    start_column=min_col,
+                    end_row=target_row,
+                    end_column=max_col
+                )
+            for col, value in remark_row_values.items():
+                set_item_cell_value(target_row, col, value)
+
+        final_remark_row = remark_row
+        if len(items) > current_capacity:
+            extra_rows = len(items) - current_capacity
+            ws.insert_rows(remark_row, amount=extra_rows)
+            for insert_idx in range(extra_rows):
+                target_row = remark_row + insert_idx
+                reset_item_row_structure(target_row)
             max_item_row = remark_row + extra_rows - 1
+            final_remark_row = remark_row + extra_rows
+        reset_remark_row_structure(final_remark_row)
+        for target_row in range(row + 1, row + len(items)):
+            if target_row <= max_item_row:
+                reset_item_row_structure(target_row)
     for item in items:
         if row > max_item_row:
             break
@@ -420,6 +482,7 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
         set_item_cell_value(row, 15, item.get("qty", 0))
         set_item_cell_value(row, 19, item.get("price", 0))
         set_item_cell_value(row, 26, item.get("amount", 0))
+        set_item_cell_value(row, 29, item.get("delivery_date", ""))
         row += 1
     total_amount = _to_decimal(payload.get("total_amount", 0))
     total_qty = _to_decimal(payload.get("total_qty", 0))
@@ -509,6 +572,7 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
             set_item_cell_value(row, 15, item.get("qty", 0))
             set_item_cell_value(row, 19, item.get("price", 0))
             set_item_cell_value(row, 26, item.get("amount", 0))
+            set_item_cell_value(row, 29, item.get("delivery_date", ""))
             row += 1
         total_amount = _to_decimal(payload.get("total_amount", 0))
         total_qty = _to_decimal(payload.get("total_qty", 0))
@@ -540,9 +604,8 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
 
 def _fill_template_to_temp_excel(payload: dict) -> Path:
     temp_xlsx = CONTRACT_DIR / f"temp_filled_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}.xlsx"
-    if not _fill_template_excel_with_win32(payload, temp_xlsx):
-        template_path = _resolve_template_path()
-        _fill_template_excel(payload, temp_xlsx, template_path=template_path)
+    template_path = _resolve_template_path()
+    _fill_template_excel(payload, temp_xlsx, template_path=template_path)
     return temp_xlsx
 
 
@@ -651,8 +714,8 @@ def _render_pdf_with_reportlab(xlsx_path: Path, output_pdf: Path) -> None:
         y -= 16
 
     y -= 10
-    table_headers = ["序号", "项目号", "项目名称", "物料名称", "型号规格", "数量", "含税单价", "价税合计"]
-    col_widths = [32, 62, 75, 95, 95, 48, 68, 70]
+    table_headers = ["序号", "项目号", "项目名称", "物料名称", "型号规格", "数量", "含税单价", "价税合计", "交货日期"]
+    col_widths = [32, 62, 75, 95, 95, 48, 68, 70, 70]
     x = start_x
     for i, h in enumerate(table_headers):
         c.setFont(font_name, 11)
@@ -671,6 +734,7 @@ def _render_pdf_with_reportlab(xlsx_path: Path, output_pdf: Path) -> None:
             get_display_value_by_pos(row, 15),
             get_display_value_by_pos(row, 19),
             get_display_value_by_pos(row, 26),
+            get_display_value_by_pos(row, 29),
         ]
         if isinstance(values[0], str) and "备注" in values[0]:
             break
