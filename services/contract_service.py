@@ -228,6 +228,22 @@ def _format_delivery_date(value) -> str:
     return text[:10]
 
 
+def _estimate_wrapped_lines(value, chars_per_line: int) -> int:
+    if chars_per_line <= 0:
+        chars_per_line = 1
+    text = str(value or "")
+    if not text:
+        return 1
+    total_lines = 0
+    for segment in text.replace("\r\n", "\n").split("\n"):
+        seg_len = len(segment)
+        if seg_len == 0:
+            total_lines += 1
+        else:
+            total_lines += (seg_len + chars_per_line - 1) // chars_per_line
+    return max(1, total_lines)
+
+
 def _to_chinese_upper_amount(amount: Decimal) -> str:
     digits = "零壹贰叁肆伍陆柒捌玖"
     units = ["", "拾", "佰", "仟"]
@@ -379,6 +395,17 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
         except Exception:
             return
 
+    def get_item_cell(row_idx: int, col_idx: int):
+        try:
+            cell = ws.cell(row=row_idx, column=col_idx)
+            if isinstance(cell, MergedCell):
+                for merged_range in ws.merged_cells.ranges:
+                    if cell.coordinate in merged_range:
+                        return ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+            return cell
+        except Exception:
+            return ws.cell(row=row_idx, column=col_idx)
+
     def clone_row_style(source_row: int, target_row: int):
         try:
             ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
@@ -402,6 +429,7 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
     set_cell_value(template_cells["project_no"], payload.get("project_no") or payload.get("task_title", ""))
     items = payload.get("items", [])
     row = 42
+    base_item_row_height = ws.row_dimensions[row].height or 22
     max_item_row = ws.max_row
     remark_row = None
     for r in range(42, ws.max_row + 1):
@@ -474,15 +502,35 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
     for item in items:
         if row > max_item_row:
             break
+        item_project_no = payload.get("project_no") or payload.get("task_title", "")
+        item_project_name = payload.get("project_name") or payload.get("task_title", "")
+        item_material_name = item.get("material_name", "")
+        item_material_code = item.get("material_code", "")
+        item_delivery_date = item.get("delivery_date", "")
         set_item_cell_value(row, 2, item.get("index"))
-        set_item_cell_value(row, 3, payload.get("project_no") or payload.get("task_title", ""))
-        set_item_cell_value(row, 7, payload.get("project_name") or payload.get("task_title", ""))
-        set_item_cell_value(row, 9, item.get("material_name", ""))
-        set_item_cell_value(row, 11, item.get("material_code", ""))
+        set_item_cell_value(row, 3, item_project_no)
+        set_item_cell_value(row, 7, item_project_name)
+        set_item_cell_value(row, 9, item_material_name)
+        set_item_cell_value(row, 11, item_material_code)
         set_item_cell_value(row, 15, item.get("qty", 0))
         set_item_cell_value(row, 19, item.get("price", 0))
         set_item_cell_value(row, 26, item.get("amount", 0))
-        set_item_cell_value(row, 29, item.get("delivery_date", ""))
+        set_item_cell_value(row, 29, item_delivery_date)
+        wrap_rules = {
+            3: (item_project_no, 12),
+            7: (item_project_name, 10),
+            9: (item_material_name, 10),
+            11: (item_material_code, 14),
+            29: (item_delivery_date, 10),
+        }
+        max_lines = 1
+        for col_idx, (text, chars_per_line) in wrap_rules.items():
+            target_cell = get_item_cell(row, col_idx)
+            alignment = copy(target_cell.alignment)
+            alignment.wrap_text = True
+            target_cell.alignment = alignment
+            max_lines = max(max_lines, _estimate_wrapped_lines(text, chars_per_line))
+        ws.row_dimensions[row].height = max(base_item_row_height, 16 * max_lines + 8)
         row += 1
     total_amount = _to_decimal(payload.get("total_amount", 0))
     total_qty = _to_decimal(payload.get("total_qty", 0))
@@ -545,6 +593,7 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
         set_range_value(template_cells["project_no"], payload.get("project_no") or payload.get("task_title", ""))
         items = payload.get("items", [])
         row = 42
+        base_item_row_height = float(sheet.Rows(row).RowHeight or 22)
         max_item_row = int(sheet.UsedRange.Rows.Count)
         remark_row = None
         for r in range(42, max_item_row + 1):
@@ -564,15 +613,34 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
         for item in items:
             if row > max_item_row:
                 break
+            item_project_no = payload.get("project_no") or payload.get("task_title", "")
+            item_project_name = payload.get("project_name") or payload.get("task_title", "")
+            item_material_name = item.get("material_name", "")
+            item_material_code = item.get("material_code", "")
+            item_delivery_date = item.get("delivery_date", "")
             set_item_cell_value(row, 2, item.get("index"))
-            set_item_cell_value(row, 3, payload.get("project_no") or payload.get("task_title", ""))
-            set_item_cell_value(row, 7, payload.get("project_name") or payload.get("task_title", ""))
-            set_item_cell_value(row, 9, item.get("material_name", ""))
-            set_item_cell_value(row, 11, item.get("material_code", ""))
+            set_item_cell_value(row, 3, item_project_no)
+            set_item_cell_value(row, 7, item_project_name)
+            set_item_cell_value(row, 9, item_material_name)
+            set_item_cell_value(row, 11, item_material_code)
             set_item_cell_value(row, 15, item.get("qty", 0))
             set_item_cell_value(row, 19, item.get("price", 0))
             set_item_cell_value(row, 26, item.get("amount", 0))
-            set_item_cell_value(row, 29, item.get("delivery_date", ""))
+            set_item_cell_value(row, 29, item_delivery_date)
+            wrap_rules = {
+                3: (item_project_no, 12),
+                7: (item_project_name, 10),
+                9: (item_material_name, 10),
+                11: (item_material_code, 14),
+                29: (item_delivery_date, 10),
+            }
+            max_lines = 1
+            for col_idx, (text, chars_per_line) in wrap_rules.items():
+                cell = sheet.Cells(row, col_idx)
+                target = cell.MergeArea if bool(cell.MergeCells) else cell
+                target.WrapText = True
+                max_lines = max(max_lines, _estimate_wrapped_lines(text, chars_per_line))
+            sheet.Rows(row).RowHeight = max(base_item_row_height, 16 * max_lines + 8)
             row += 1
         total_amount = _to_decimal(payload.get("total_amount", 0))
         total_qty = _to_decimal(payload.get("total_qty", 0))
