@@ -553,8 +553,8 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
         set_item_cell_value(row, 29, item_delivery_date)
         wrap_rules = {
             3: (item_project_no, 12),
-            7: (item_project_name, 10),
-            9: (item_material_name, 10),
+            7: (item_project_name, 7),
+            9: (item_material_name, 8),
             11: (item_material_code, 14),
             29: (item_delivery_date, 10),
         }
@@ -565,7 +565,7 @@ def _fill_template_excel(payload: dict, output_xlsx: Path, template_path: Path =
             alignment.wrap_text = True
             target_cell.alignment = alignment
             max_lines = max(max_lines, _estimate_wrapped_lines(text, chars_per_line))
-        ws.row_dimensions[row].height = max(base_item_row_height, 16 * max_lines + 8)
+        ws.row_dimensions[row].height = max(base_item_row_height, 18 * max_lines + 10)
         row += 1
     total_amount = _to_decimal(payload.get("total_amount", 0))
     total_qty = _to_decimal(payload.get("total_qty", 0))
@@ -664,8 +664,8 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
             set_item_cell_value(row, 29, item_delivery_date)
             wrap_rules = {
                 3: (item_project_no, 12),
-                7: (item_project_name, 10),
-                9: (item_material_name, 10),
+                7: (item_project_name, 7),
+                9: (item_material_name, 8),
                 11: (item_material_code, 14),
                 29: (item_delivery_date, 10),
             }
@@ -675,7 +675,7 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
                 target = cell.MergeArea if bool(cell.MergeCells) else cell
                 target.WrapText = True
                 max_lines = max(max_lines, _estimate_wrapped_lines(text, chars_per_line))
-            sheet.Rows(row).RowHeight = max(base_item_row_height, 16 * max_lines + 8)
+            sheet.Rows(row).RowHeight = max(base_item_row_height, 18 * max_lines + 10)
             row += 1
         total_amount = _to_decimal(payload.get("total_amount", 0))
         total_qty = _to_decimal(payload.get("total_qty", 0))

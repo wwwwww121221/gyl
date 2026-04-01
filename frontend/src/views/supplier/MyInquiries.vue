@@ -182,14 +182,14 @@
         <el-form-item label="地址" prop="address">
           <el-input v-model="contractForm.address" placeholder="请输入地址" />
         </el-form-item>
-        <el-form-item label="法定代表人" prop="legal_rep">
-          <el-input v-model="contractForm.legal_rep" placeholder="请输入法定代表人" />
+        <el-form-item label="法定代表人" prop="legal_representative">
+          <el-input v-model="contractForm.legal_representative" placeholder="请输入法定代表人" />
         </el-form-item>
         <el-form-item label="委托代理人" prop="agent">
           <el-input v-model="contractForm.agent" placeholder="请输入委托代理人（选填）" />
         </el-form-item>
-        <el-form-item label="联系电话" prop="phone">
-          <el-input v-model="contractForm.phone" placeholder="请输入联系电话" />
+        <el-form-item label="联系电话" prop="contact_phone">
+          <el-input v-model="contractForm.contact_phone" placeholder="请输入联系电话" />
         </el-form-item>
         <el-form-item label="开户银行" prop="bank_name">
           <el-input v-model="contractForm.bank_name" placeholder="请输入开户银行" />
@@ -269,9 +269,9 @@ const contractSubmitLoading = ref(false)
 const contractFormRef = ref()
 const contractForm = ref({
   address: '',
-  legal_rep: '',
+  legal_representative: '',
   agent: '',
-  phone: '',
+  contact_phone: '',
   bank_name: '',
   bank_account: '',
   tax_id: '',
@@ -280,8 +280,8 @@ const contractForm = ref({
 })
 const contractFormRules = {
   address: [{ required: true, message: '请输入地址', trigger: 'blur' }],
-  legal_rep: [{ required: true, message: '请输入法定代表人', trigger: 'blur' }],
-  phone: [{ required: true, message: '请输入联系电话', trigger: 'blur' }],
+  legal_representative: [{ required: true, message: '请输入法定代表人', trigger: 'blur' }],
+  contact_phone: [{ required: true, message: '请输入联系电话', trigger: 'blur' }],
   bank_name: [{ required: true, message: '请输入开户银行', trigger: 'blur' }],
   bank_account: [{ required: true, message: '请输入账号', trigger: 'blur' }],
   tax_id: [{ required: true, message: '请输入税号', trigger: 'blur' }],
@@ -386,9 +386,9 @@ const handleViewContract = (row) => {
 const resetContractForm = () => {
   contractForm.value = {
     address: '',
-    legal_rep: '',
+    legal_representative: '',
     agent: '',
-    phone: '',
+    contact_phone: '',
     bank_name: '',
     bank_account: '',
     tax_id: '',
