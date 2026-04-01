@@ -6,7 +6,7 @@ import asyncio
 
 from models import (
     get_db, SessionLocal, InquirySupplier, InquiryTaskItem,
-    Quotation, LinkStatus, InquiryRequest, TaskStatus, InquiryTask, Supplier, User
+    Quotation, LinkStatus, InquiryRequest, TaskStatus, InquiryTask, Supplier, User, Contract
 )
 from schemas_supplier import QuoteSubmission, SupplierQuoteResponse, SupplierUpdate, SupplierContractInfoSubmit
 from services.llm_factory import get_llm_service
@@ -93,6 +93,8 @@ def get_my_inquiries(
         task = db.query(InquiryTask).filter(InquiryTask.id == link.task_id).first()
         if not task:
             continue
+        contract_record = db.query(Contract).filter(Contract.inquiry_supplier_id == link.id).first()
+        contract_pdf_path = contract_record.pdf_path if contract_record else None
             
         result.append({
             "inquiry_supplier_id": link.id,
@@ -101,8 +103,8 @@ def get_my_inquiries(
             "status": link.status,
             "task_status": task.status,
             "current_round": link.current_round,
-            "contract_pdf": link.contract_pdf,
-            "contract_pdf_path": link.contract_pdf_path,
+            "contract_pdf": contract_pdf_path,
+            "contract_pdf_path": contract_pdf_path,
             "created_at": link.created_at
         })
         
@@ -131,6 +133,8 @@ def get_inquiry_details(
         raise HTTPException(status_code=404, detail="Inquiry not found")
         
     task = db.query(InquiryTask).filter(InquiryTask.id == link.task_id).first()
+    contract_record = db.query(Contract).filter(Contract.inquiry_supplier_id == link.id).first()
+    contract_pdf_path = contract_record.pdf_path if contract_record else None
     
     items = []
     for item in task.items:
@@ -150,8 +154,8 @@ def get_inquiry_details(
         "round": link.current_round,
         "status": link.status,
         "latest_ai_feedback": link.latest_ai_feedback,
-        "contract_pdf": link.contract_pdf,
-        "contract_pdf_path": link.contract_pdf_path,
+        "contract_pdf": contract_pdf_path,
+        "contract_pdf_path": contract_pdf_path,
         "items": items
     }
 
@@ -180,18 +184,37 @@ def confirm_contract(
     if link.status != LinkStatus.DEAL:
         raise HTTPException(status_code=400, detail="Only deal inquiry can confirm contract")
 
-    link.address = payload.address
-    link.legal_rep = payload.legal_rep
-    link.agent = payload.agent
-    link.phone = payload.phone
-    link.bank_name = payload.bank_name
-    link.bank_account = payload.bank_account
-    link.tax_id = payload.tax_id
-    link.fax = payload.fax
-    link.postal_code = payload.postal_code
-    db.add(link)
+    contract_record = db.query(Contract).filter(Contract.inquiry_supplier_id == link.id).first()
+    if not contract_record:
+        contract_record = Contract(
+            task_id=link.task_id,
+            inquiry_supplier_id=link.id,
+            status="pending"
+        )
+    contract_record.address = payload.address
+    contract_record.legal_representative = payload.legal_representative
+    contract_record.agent = payload.agent
+    contract_record.contact_phone = payload.contact_phone
+    contract_record.bank_name = payload.bank_name
+    contract_record.bank_account = payload.bank_account
+    contract_record.tax_id = payload.tax_id
+    contract_record.fax = payload.fax
+    contract_record.postal_code = payload.postal_code
+    if payload.buyer_company_name:
+        contract_record.buyer_company_name = payload.buyer_company_name
+    if contract_record.pdf_path:
+        history_versions = list(contract_record.history_versions or [])
+        history_versions.append({
+            "pdf_path": contract_record.pdf_path,
+            "generated_at": datetime.now().isoformat(),
+            "event": "supplier_resubmitted"
+        })
+        contract_record.history_versions = history_versions
+        contract_record.pdf_path = None
+    contract_record.status = "待供应商填写"
+    db.add(contract_record)
     db.commit()
-    db.refresh(link)
+    db.refresh(contract_record)
 
     background_tasks.add_task(_generate_contract_pdf_background, link.id)
     return {"message": "合同信息已提交，正在生成合同", "inquiry_id": link.id}

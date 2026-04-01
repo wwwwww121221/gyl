@@ -15,7 +15,7 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session
 
-from models import InquirySupplier, InquiryTask, InquiryTaskItem, InquiryRequest, Quotation, Supplier, LinkStatus
+from models import InquirySupplier, InquiryTask, InquiryTaskItem, InquiryRequest, Quotation, Supplier, LinkStatus, Contract, ContractTemplate
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -54,17 +54,45 @@ TEMPLATE_DYNAMIC_RULES = {
 }
 
 
-def _resolve_template_path() -> Path:
-    candidates = [
+def _resolve_template_path(template_file_path: str = None) -> Path:
+    candidates = []
+    if template_file_path:
+        custom_path = Path(template_file_path)
+        if custom_path.is_absolute():
+            candidates.append(custom_path)
+        else:
+            candidates.append(BASE_DIR / custom_path)
+            candidates.append(TEMPLATE_DIR / custom_path)
+    candidates.extend([
         TEMPLATE_DIR / "合同模版.xlsx",
         TEMPLATE_DIR / "合同模版.XLSX",
         BASE_DIR / "合同模版.xlsx",
         BASE_DIR / "合同模版.XLS",
-    ]
+    ])
     for p in candidates:
         if p.exists():
             return p
     raise FileNotFoundError("合同模板文件不存在，请将‘合同模版.xlsx’放入 static/templates 目录")
+
+
+def _get_active_contract_template(db: Session):
+    return db.query(ContractTemplate).filter(ContractTemplate.is_active == True).order_by(ContractTemplate.id.desc()).first()
+
+
+def _append_history_version(history_versions, pdf_path: str, event: str = "regenerated"):
+    if not pdf_path:
+        return history_versions or []
+    versions = list(history_versions or [])
+    if versions:
+        last = versions[-1]
+        if isinstance(last, dict) and last.get("pdf_path") == pdf_path:
+            return versions
+    versions.append({
+        "pdf_path": pdf_path,
+        "generated_at": datetime.now().isoformat(),
+        "event": event,
+    })
+    return versions
 
 
 def _normalize_text(value) -> str:
@@ -279,7 +307,12 @@ def _to_chinese_upper_amount(amount: Decimal) -> str:
     return f"{''.join(text_parts).rstrip('零')}圆整"
 
 
-def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
+def _collect_contract_payload(
+    db: Session,
+    link: InquirySupplier,
+    contract_record: Contract = None,
+    buyer_company_name: str = None
+) -> dict:
     task = db.query(InquiryTask).filter(InquiryTask.id == link.task_id).first()
     supplier = db.query(Supplier).filter(Supplier.id == link.supplier_id).first()
     if not task or not supplier:
@@ -301,7 +334,9 @@ def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
 
     project_no = ""
     project_name = ""
-    buyer_name = "俊朗电气有限公司"
+    buyer_name = buyer_company_name or "俊朗电气有限公司"
+    if contract_record and contract_record.buyer_company_name:
+        buyer_name = contract_record.buyer_company_name
     items = []
     total_amount = Decimal("0")
     total_qty = Decimal("0")
@@ -342,15 +377,15 @@ def _collect_contract_payload(db: Session, link: InquirySupplier) -> dict:
         "items": items,
         "total_qty": float(total_qty),
         "total_amount": float(total_amount),
-        "sup_address": link.address or "",
-        "sup_legal_rep": link.legal_rep or "",
-        "sup_agent": link.agent or "",
-        "sup_phone": link.phone or "",
-        "sup_bank_name": link.bank_name or "",
-        "sup_bank_account": link.bank_account or "",
-        "sup_tax_id": link.tax_id or "",
-        "sup_fax": link.fax or "",
-        "sup_postal_code": link.postal_code or "",
+        "sup_address": contract_record.address if contract_record else "",
+        "sup_legal_rep": contract_record.legal_representative if contract_record else "",
+        "sup_agent": contract_record.agent if contract_record else "",
+        "sup_phone": contract_record.contact_phone if contract_record else "",
+        "sup_bank_name": contract_record.bank_name if contract_record else "",
+        "sup_bank_account": contract_record.bank_account if contract_record else "",
+        "sup_tax_id": contract_record.tax_id if contract_record else "",
+        "sup_fax": contract_record.fax if contract_record else "",
+        "sup_postal_code": contract_record.postal_code if contract_record else "",
     }
 
 
@@ -670,9 +705,9 @@ def _fill_template_excel_with_win32(payload: dict, output_xlsx: Path) -> bool:
             pythoncom.CoUninitialize()
 
 
-def _fill_template_to_temp_excel(payload: dict) -> Path:
+def _fill_template_to_temp_excel(payload: dict, template_path: Path = None) -> Path:
     temp_xlsx = CONTRACT_DIR / f"temp_filled_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}.xlsx"
-    template_path = _resolve_template_path()
+    template_path = template_path or _resolve_template_path()
     _fill_template_excel(payload, temp_xlsx, template_path=template_path)
     return temp_xlsx
 
@@ -822,12 +857,37 @@ def _render_pdf_with_reportlab(xlsx_path: Path, output_pdf: Path) -> None:
     c.save()
 
 
-async def generate_contract_pdf(db: Session, inquiry_id: int) -> str:
+async def generate_contract_pdf(
+    db: Session,
+    inquiry_id: int,
+    contract_template: ContractTemplate = None,
+    template_file_path: str = None,
+    buyer_company_name: str = None
+) -> str:
     link = _resolve_deal_link(db, inquiry_id)
-    payload = _collect_contract_payload(db, link)
+    active_template = contract_template or _get_active_contract_template(db)
+    resolved_buyer_name = buyer_company_name or (active_template.default_buyer_name if active_template else None)
+    contract_record = db.query(Contract).filter(Contract.inquiry_supplier_id == link.id).first()
+    if not contract_record:
+        contract_record = Contract(
+            task_id=link.task_id,
+            inquiry_supplier_id=link.id,
+            status="pending",
+            buyer_company_name=resolved_buyer_name or "俊朗电气有限公司",
+        )
+        db.add(contract_record)
+        db.flush()
+    payload = _collect_contract_payload(
+        db,
+        link,
+        contract_record=contract_record,
+        buyer_company_name=resolved_buyer_name
+    )
 
     output_pdf = CONTRACT_DIR / f"合同_{inquiry_id}.pdf"
-    temp_xlsx = _fill_template_to_temp_excel(payload)
+    resolved_template_file_path = template_file_path or (active_template.file_path if active_template else None)
+    template_path = _resolve_template_path(resolved_template_file_path)
+    temp_xlsx = _fill_template_to_temp_excel(payload, template_path=template_path)
     try:
         _export_excel_to_pdf(temp_xlsx, output_pdf)
     finally:
@@ -835,12 +895,19 @@ async def generate_contract_pdf(db: Session, inquiry_id: int) -> str:
             temp_xlsx.unlink()
 
     static_pdf_path = f"/static/contracts/{output_pdf.name}"
-    link.contract_pdf = static_pdf_path
-    if hasattr(link, "contract_pdf_path"):
-        link.contract_pdf_path = static_pdf_path
-    db.add(link)
+    if contract_record.pdf_path and contract_record.pdf_path != static_pdf_path:
+        contract_record.history_versions = _append_history_version(
+            contract_record.history_versions,
+            contract_record.pdf_path
+        )
+    contract_record.pdf_path = static_pdf_path
+    contract_record.status = "generated"
+    contract_record.total_amount = payload.get("total_amount")
+    if payload.get("buyer_name"):
+        contract_record.buyer_company_name = payload.get("buyer_name")
+    db.add(contract_record)
     db.commit()
-    db.refresh(link)
+    db.refresh(contract_record)
     return static_pdf_path
 
 

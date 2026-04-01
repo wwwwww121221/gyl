@@ -6,7 +6,7 @@ import uuid
 
 from models import (
     get_db, User, InquiryRequest, InquiryTask, InquiryTaskItem,
-    Supplier, InquirySupplier, InquiryStatus, TaskStatus, LinkStatus
+    Supplier, InquirySupplier, InquiryStatus, TaskStatus, LinkStatus, Quotation, Contract, ContractTemplate
 )
 from schemas import InquiryTaskCreate, InquiryTask as InquiryTaskSchema, StrategyConfig, InquiryRequest as InquiryRequestSchema
 from routers.auth import oauth2_scheme, login_access_token # reuse auth but simpler dependency
@@ -19,6 +19,27 @@ router = APIRouter()
 
 class ManualInterventionPayload(BaseModel):
     message: Optional[str] = None
+
+
+def _calc_link_total_amount(db: Session, link: InquirySupplier) -> float:
+    quotes = db.query(Quotation).filter(
+        Quotation.inquiry_supplier_id == link.id,
+        Quotation.round == link.current_round
+    ).all()
+    if not quotes:
+        quotes = db.query(Quotation).filter(
+            Quotation.inquiry_supplier_id == link.id
+        ).order_by(Quotation.round.desc(), Quotation.id.asc()).all()
+        if quotes:
+            max_round = quotes[0].round
+            quotes = [q for q in quotes if q.round == max_round]
+    total_amount = 0.0
+    for q in quotes:
+        task_item = db.query(InquiryTaskItem).filter(InquiryTaskItem.id == q.item_id).first()
+        req = db.query(InquiryRequest).filter(InquiryRequest.id == task_item.request_id).first() if task_item else None
+        qty = req.qty if req and req.qty is not None else (q.qty or 0)
+        total_amount += float(q.price or 0) * float(qty or 0)
+    return total_amount
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -346,6 +367,25 @@ def close_inquiry_task(
 
     if selected_link_id and not selected_link:
         raise HTTPException(status_code=404, detail="Selected supplier link not found in this task")
+
+    if selected_link:
+        total_amount = _calc_link_total_amount(db, selected_link)
+        active_template = db.query(ContractTemplate).filter(
+            ContractTemplate.is_active == True
+        ).order_by(ContractTemplate.id.desc()).first()
+        contract_record = db.query(Contract).filter(
+            Contract.inquiry_supplier_id == selected_link.id
+        ).first()
+        if not contract_record:
+            contract_record = Contract(
+                task_id=task.id,
+                inquiry_supplier_id=selected_link.id,
+                status="待供应商填写"
+            )
+        contract_record.total_amount = total_amount
+        if active_template and active_template.default_buyer_name and not contract_record.buyer_company_name:
+            contract_record.buyer_company_name = active_template.default_buyer_name
+        db.add(contract_record)
 
     db.commit()
     return {"message": "Task closed successfully."}

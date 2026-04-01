@@ -37,6 +37,14 @@
             <el-icon><Goods /></el-icon>
             <span>物料管理</span>
           </el-menu-item>
+          <el-menu-item index="/contracts">
+            <el-icon><Document /></el-icon>
+            <span>合同管理</span>
+          </el-menu-item>
+          <el-menu-item index="/templates">
+            <el-icon><Files /></el-icon>
+            <span>模板配置</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       <el-container>
@@ -73,7 +81,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { DataBoard, User, Goods, Expand, ArrowDown, List } from '@element-plus/icons-vue'
+import { DataBoard, User, Goods, Expand, ArrowDown, List, Document, Files } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 const router = useRouter()
@@ -91,7 +99,9 @@ const currentRouteName = computed(() => {
     '/inquiries/tasks': '询价单',
     '/suppliers/pending': '待审核供应商',
     '/suppliers/manage': '已审核供应商',
-    '/materials': '物料管理'
+    '/materials': '物料管理',
+    '/contracts': '合同管理',
+    '/templates': '模板配置'
   }
   return map[route.path] || '未知页面'
 })

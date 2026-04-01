@@ -92,6 +92,30 @@ const routes = [
     ]
   },
   {
+    path: '/contracts',
+    component: MainLayout,
+    children: [
+      {
+        path: '',
+        name: 'ContractManagement',
+        component: () => import('../views/ContractManagement.vue'),
+        meta: { requiresRole: ['admin', 'buyer'] }
+      }
+    ]
+  },
+  {
+    path: '/templates',
+    component: MainLayout,
+    children: [
+      {
+        path: '',
+        name: 'TemplateManagement',
+        component: () => import('../views/TemplateManagement.vue'),
+        meta: { requiresRole: ['admin', 'buyer'] }
+      }
+    ]
+  },
+  {
     path: '/supplier',
     component: SupplierLayout,
     children: [

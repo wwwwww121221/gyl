@@ -133,17 +133,6 @@ class InquirySupplier(Base):
     current_round = Column(Integer, default=1)
     status = Column(String, default=LinkStatus.SENT)
     latest_ai_feedback = Column(Text, nullable=True, comment="最新的AI谈判反馈")
-    contract_pdf = Column(String, nullable=True)
-    contract_pdf_path = Column(String, nullable=True)
-    address = Column(String, nullable=True)
-    legal_rep = Column(String, nullable=True)
-    agent = Column(String, nullable=True)
-    phone = Column(String, nullable=True)
-    bank_name = Column(String, nullable=True)
-    bank_account = Column(String, nullable=True)
-    tax_id = Column(String, nullable=True)
-    fax = Column(String, nullable=True)
-    postal_code = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     task = relationship("InquiryTask", back_populates="suppliers")
@@ -178,7 +167,19 @@ class Contract(Base):
     id = Column(Integer, primary_key=True, index=True)
     task_id = Column(Integer, ForeignKey("inquiry_tasks.id"), nullable=False)
     inquiry_supplier_id = Column(Integer, ForeignKey("inquiry_suppliers.id"), nullable=False)
-    pdf_path = Column(Text, nullable=False)
+    pdf_path = Column(Text, nullable=True)
+    total_amount = Column(Float, nullable=True)
+    buyer_company_name = Column(String, nullable=True)
+    history_versions = Column(JSON, nullable=True, default=list)
+    address = Column(String, nullable=True)
+    legal_representative = Column(String, nullable=True)
+    agent = Column(String, nullable=True)
+    contact_phone = Column(String, nullable=True)
+    bank_name = Column(String, nullable=True)
+    bank_account = Column(String, nullable=True)
+    tax_id = Column(String, nullable=True)
+    fax = Column(String, nullable=True)
+    postal_code = Column(String, nullable=True)
     status = Column(String, default="generated")
     generated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.now)
@@ -187,6 +188,17 @@ class Contract(Base):
     task = relationship("InquiryTask", back_populates="contracts")
     inquiry_supplier = relationship("InquirySupplier", back_populates="contracts")
     generator = relationship("User")
+
+class ContractTemplate(Base):
+    __tablename__ = "contract_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True)
+    file_path = Column(String, nullable=False)
+    default_buyer_name = Column(String, nullable=True)
+    is_active = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 class SupplierMetric(Base):
     """

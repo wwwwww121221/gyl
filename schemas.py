@@ -85,7 +85,19 @@ class InquiryTask(InquiryTaskBase):
 class ContractBase(BaseModel):
     task_id: int
     inquiry_supplier_id: int
-    pdf_path: str
+    pdf_path: Optional[str] = None
+    total_amount: Optional[float] = None
+    buyer_company_name: Optional[str] = None
+    history_versions: Optional[List[dict]] = None
+    address: Optional[str] = None
+    legal_representative: Optional[str] = None
+    agent: Optional[str] = None
+    contact_phone: Optional[str] = None
+    bank_name: Optional[str] = None
+    bank_account: Optional[str] = None
+    tax_id: Optional[str] = None
+    fax: Optional[str] = None
+    postal_code: Optional[str] = None
     status: Optional[str] = "generated"
     generated_by: Optional[int] = None
 
@@ -93,6 +105,23 @@ class ContractCreate(ContractBase):
     pass
 
 class Contract(ContractBase):
+    id: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class ContractTemplateBase(BaseModel):
+    name: str
+    file_path: str
+    default_buyer_name: Optional[str] = None
+    is_active: bool = False
+
+class ContractTemplateCreate(ContractTemplateBase):
+    pass
+
+class ContractTemplate(ContractTemplateBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None

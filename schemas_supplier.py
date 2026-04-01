@@ -25,11 +25,12 @@ class SupplierUpdate(BaseModel):
 
 class SupplierContractInfoSubmit(BaseModel):
     address: str = Field(..., min_length=1)
-    legal_rep: str = Field(..., min_length=1)
+    legal_representative: str = Field(..., min_length=1)
     agent: Optional[str] = None
-    phone: str = Field(..., min_length=1)
+    contact_phone: str = Field(..., min_length=1)
     bank_name: str = Field(..., min_length=1)
     bank_account: str = Field(..., min_length=1)
     tax_id: str = Field(..., min_length=1)
     fax: str = Field(..., min_length=1)
     postal_code: str = Field(..., min_length=1)
+    buyer_company_name: Optional[str] = None
