@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from core.config import settings
-from routers import auth, erp_sync, inquiry, supplier, warning, contract, template
+from routers import auth, erp_sync, inquiry, supplier, warning, contract, template, material
 from models import Base, engine
 import traceback
 import os
@@ -66,6 +66,7 @@ app.include_router(supplier.router, prefix=f"{settings.API_V1_STR}/supplier", ta
 app.include_router(warning.router, prefix=f"{settings.API_V1_STR}/warning", tags=["Warning"])
 app.include_router(contract.router, prefix=f"{settings.API_V1_STR}/contract", tags=["Contract"])
 app.include_router(template.router, prefix=f"{settings.API_V1_STR}/template", tags=["Template"])
+app.include_router(material.router, prefix=f"{settings.API_V1_STR}/material", tags=["Material"])
 
 @app.get("/")
 def root():
