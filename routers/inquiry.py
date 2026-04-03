@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 from pydantic import BaseModel
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 
 from models import (
     get_db, User, InquiryRequest, InquiryTask, InquiryTaskItem,
@@ -269,8 +269,9 @@ def get_task_details(
         score_items = []
         for q in current_round_quotes:
             delivery_days = 0.0
-            if isinstance(q.delivery_date, datetime):
-                delivery_days = float((q.delivery_date.date() - today).days)
+            if isinstance(q.delivery_date, (datetime, date)):
+                d_date = q.delivery_date.date() if isinstance(q.delivery_date, datetime) else q.delivery_date
+                delivery_days = float((d_date - today).days)
                 if delivery_days < 0:
                     delivery_days = 0.0
             elif q.delivery_date is not None:
@@ -418,8 +419,9 @@ def close_inquiry_task(
             score_items = []
             for q in current_round_quotes:
                 delivery_days = 0.0
-                if isinstance(q.delivery_date, datetime):
-                    delivery_days = float((q.delivery_date.date() - today).days)
+                if isinstance(q.delivery_date, (datetime, date)):
+                    d_date = q.delivery_date.date() if isinstance(q.delivery_date, datetime) else q.delivery_date
+                    delivery_days = float((d_date - today).days)
                     if delivery_days < 0:
                         delivery_days = 0.0
                 elif q.delivery_date is not None:

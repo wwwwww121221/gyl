@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import Any
-from datetime import datetime
+from datetime import datetime, date
 import asyncio
 
 from models import (
     get_db, SessionLocal, InquirySupplier, InquiryTaskItem,
-    Quotation, LinkStatus, InquiryRequest, TaskStatus, InquiryTask, Supplier, User, Contract
+    Quotation, LinkStatus, InquiryRequest, TaskStatus, InquiryTask, Supplier, User, Contract, ContractTemplate
 )
 from schemas_supplier import QuoteSubmission, SupplierQuoteResponse, SupplierUpdate, SupplierContractInfoSubmit
 from services.contract_service import generate_contract_pdf
@@ -353,7 +353,7 @@ async def submit_quote(
             if mq.item_id not in market_min_price_map or price < market_min_price_map[mq.item_id]:
                 market_min_price_map[mq.item_id] = price
 
-        async def process_link(l):
+        def process_link(l):
             # 获取该供应商本轮报价
             l_quotes = db.query(Quotation).filter(Quotation.inquiry_supplier_id == l.id, Quotation.round == current_round).all()
             if not l_quotes:
@@ -388,7 +388,8 @@ async def submit_quote(
             l.status = LinkStatus.NEGOTIATION
 
         quoted_links = [l for l in all_links if l.status == LinkStatus.QUOTED]
-        await asyncio.gather(*(process_link(l) for l in quoted_links))
+        for l in quoted_links:
+            process_link(l)
         db.commit()
         
         return {
@@ -418,8 +419,9 @@ async def submit_quote(
             score_items = []
             for q in quotes:
                 delivery_days = 0.0
-                if isinstance(q.delivery_date, datetime):
-                    delivery_days = float((q.delivery_date.date() - today).days)
+                if isinstance(q.delivery_date, (datetime, date)):
+                    d_date = q.delivery_date.date() if isinstance(q.delivery_date, datetime) else q.delivery_date
+                    delivery_days = float((d_date - today).days)
                     if delivery_days < 0:
                         delivery_days = 0.0
                 elif q.delivery_date is not None:
@@ -448,6 +450,32 @@ async def submit_quote(
         if best_link:
             best_link.status = LinkStatus.DEAL
             best_link.latest_ai_feedback = "感谢您的配合，本次询价已达成合作。"
+            best_quotes = db.query(Quotation).filter(
+                Quotation.inquiry_supplier_id == best_link.id,
+                Quotation.round == current_round
+            ).all()
+            total_amount = 0.0
+            for q in best_quotes:
+                t_item = db.query(InquiryTaskItem).filter(InquiryTaskItem.id == q.item_id).first()
+                r_item = db.query(InquiryRequest).filter(InquiryRequest.id == t_item.request_id).first() if t_item else None
+                qty = r_item.qty if r_item and r_item.qty is not None else (q.qty or 0)
+                total_amount += float(q.price or 0) * float(qty or 0)
+            active_template = db.query(ContractTemplate).filter(
+                ContractTemplate.is_active == True
+            ).order_by(ContractTemplate.id.desc()).first()
+            contract_record = db.query(Contract).filter(
+                Contract.inquiry_supplier_id == best_link.id
+            ).first()
+            if not contract_record:
+                contract_record = Contract(
+                    task_id=best_link.task_id,
+                    inquiry_supplier_id=best_link.id,
+                    status="待供应商填写"
+                )
+            contract_record.total_amount = total_amount
+            if active_template and active_template.default_buyer_name and not contract_record.buyer_company_name:
+                contract_record.buyer_company_name = active_template.default_buyer_name
+            db.add(contract_record)
             for l in all_links:
                 if l.id != best_link.id and l.status != LinkStatus.DEAL:
                     l.status = LinkStatus.REJECT
