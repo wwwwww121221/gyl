@@ -137,14 +137,28 @@ def get_inquiry_details(
     contract_record = db.query(Contract).filter(Contract.inquiry_supplier_id == link.id).first()
     contract_pdf_path = contract_record.pdf_path if contract_record else None
     
+    last_round_quotes = {}
+    if link.current_round > 1:
+        prev_quotes = db.query(Quotation).filter(
+            Quotation.inquiry_supplier_id == link.id,
+            Quotation.round == link.current_round - 1
+        ).all()
+        for q in prev_quotes:
+            last_round_quotes[q.item_id] = q
+
     items = []
     for item in task.items:
+        prev_q = last_round_quotes.get(item.id)
+        default_delivery = prev_q.delivery_date if prev_q and prev_q.delivery_date else item.request.delivery_date
+
         items.append({
             "request_id": item.request_id,
             "material_name": item.request.material_name,
             "material_code": item.request.material_code,
             "qty": item.request.qty,
-            "delivery_date": item.request.delivery_date,
+            "delivery_date": default_delivery,
+            "price": float(prev_q.price) if prev_q and prev_q.price is not None else None,
+            "remark": prev_q.remark if prev_q else "",
             "project_name": item.request.project_info.get("name") if item.request.project_info else ""
         })
         

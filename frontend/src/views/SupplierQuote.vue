@@ -182,15 +182,15 @@ const fetchQuoteInfo = async () => {
       aiFeedback.value = res.data.latest_ai_feedback
     }
 
-    // 初始化表单数据
+    // 初始化表单数据，继承后端传递的上一轮数据
     form.items = res.data.items.map(item => ({
       request_id: item.request_id,
       material_code: item.material_code,
       material_name: item.material_name,
       qty: item.qty,
-      price: undefined,
-      delivery_date: item.delivery_date ? item.delivery_date.substring(0, 10) : '',
-      remark: ''
+      price: item.price !== null ? item.price : undefined,
+      delivery_date: item.delivery_date ? String(item.delivery_date).substring(0, 10) : '',
+      remark: item.remark || ''
     }))
   } catch (err) {
     console.error(err)

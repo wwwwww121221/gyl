@@ -293,12 +293,29 @@ def get_task_details(
 
     score_rows = calculate_supplier_scores(score_input)
     score_map = {row.get("supplier_id"): row for row in score_rows}
+    # 按照 1.综合得分(降序) 2.总价(升序) 3.交期(升序) 进行多级排序
     rank_candidates = sorted(
         score_rows,
-        key=lambda row: float(row.get("total_score", 0)),
+        key=lambda row: (
+            float(row.get("total_score", 0)),
+            -float(row.get("total_price", 0)),
+            -float(row.get("avg_delivery_days", 0))
+        ),
         reverse=True
     )
-    rank_map = {row.get("supplier_id"): idx + 1 for idx, row in enumerate(rank_candidates)}
+
+    rank_map = {}
+    for i, row in enumerate(rank_candidates):
+        if i > 0:
+            prev_row = rank_candidates[i - 1]
+            # 如果三项核心指标完全一致，则赋予完全相同的名次（并列）
+            if (float(row.get("total_score", 0)) == float(prev_row.get("total_score", 0)) and
+                float(row.get("total_price", 0)) == float(prev_row.get("total_price", 0)) and
+                float(row.get("avg_delivery_days", 0)) == float(prev_row.get("avg_delivery_days", 0))):
+                rank_map[row.get("supplier_id")] = rank_map[prev_row.get("supplier_id")]
+                continue
+        # 否则按当前所处位置赋予标准名次（例如若有并列第一，下一个就是第三名）
+        rank_map[row.get("supplier_id")] = i + 1
 
     links = []
     for link in task.suppliers:
@@ -369,11 +386,14 @@ def delete_inquiry_task(
         
     if task.status != TaskStatus.CLOSED:
         raise HTTPException(status_code=400, detail="Only closed tasks can be deleted")
-        
+
+    # === 新增：先删除关联的电子合同记录 ===
+    from models import Quotation, Contract
+    db.query(Contract).filter(Contract.task_id == task_id).delete()
+
     # 先删除相关的报价记录和供应商关联
     for link in task.suppliers:
         # 删除相关的 quotations
-        from models import Quotation
         db.query(Quotation).filter(Quotation.inquiry_supplier_id == link.id).delete()
         db.delete(link)
         
@@ -407,50 +427,17 @@ def close_inquiry_task(
     selected_link = None
     selected_link_key = selected_link_id
 
-    if selected_link_id is None:
-        today = datetime.now().date()
-        score_input = []
-        active_links = [link for link in task.suppliers if link.status != LinkStatus.REJECT]
-        for link in active_links:
-            current_round_quotes = [q for q in link.quotations if q.round == link.current_round]
-            if not current_round_quotes and link.quotations:
-                latest_round = max(q.round for q in link.quotations)
-                current_round_quotes = [q for q in link.quotations if q.round == latest_round]
-            score_items = []
-            for q in current_round_quotes:
-                delivery_days = 0.0
-                if isinstance(q.delivery_date, (datetime, date)):
-                    d_date = q.delivery_date.date() if isinstance(q.delivery_date, datetime) else q.delivery_date
-                    delivery_days = float((d_date - today).days)
-                    if delivery_days < 0:
-                        delivery_days = 0.0
-                elif q.delivery_date is not None:
-                    try:
-                        delivery_days = float(q.delivery_date)
-                        if delivery_days < 0:
-                            delivery_days = 0.0
-                    except (TypeError, ValueError):
-                        delivery_days = 0.0
-                score_items.append(
-                    {
-                        "price": float(q.price or 0),
-                        "qty": float(q.qty or 0),
-                        "delivery_days": delivery_days,
-                    }
-                )
-            score_input.append({"supplier_id": link.id, "items": score_items})
-
-        score_rows = calculate_supplier_scores(score_input)
-        if score_rows:
-            best_row = max(score_rows, key=lambda row: float(row.get("total_score", 0)))
-            selected_link_key = best_row.get("supplier_id")
-
     for link in task.suppliers:
         if selected_link_key is not None and link.id == selected_link_key:
             link.status = LinkStatus.DEAL
+            link.latest_ai_feedback = "恭喜，采购员已确认您中标，本次询价已达成合作。"
             selected_link = link
         else:
             link.status = LinkStatus.REJECT
+            if selected_link_key is None:
+                link.latest_ai_feedback = "本次询价任务已终止（流标），所有报价已作废，感谢您的参与。"
+            else:
+                link.latest_ai_feedback = "很遗憾，采购员最终选择了其他供应商，本次询价已结束。"
 
     if selected_link_key is not None and not selected_link:
         raise HTTPException(status_code=404, detail="Selected supplier link not found in this task")

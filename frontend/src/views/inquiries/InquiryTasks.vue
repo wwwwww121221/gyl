@@ -181,6 +181,34 @@
                 </template>
               </el-table-column>
               <el-table-column prop="current_round" label="当前轮次" width="100" align="center" />
+              <el-table-column label="本轮总价(¥)" width="120" align="right">
+                <template #default="scope">
+                  <span v-if="scope.row.total_price > 0" style="font-weight: bold;">{{ Number(scope.row.total_price).toFixed(2) }}</span>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="平均交期(天)" width="110" align="center">
+                <template #default="scope">
+                  <span v-if="scope.row.avg_delivery_days > 0">{{ Number(scope.row.avg_delivery_days).toFixed(1) }}</span>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="综合评分" width="120" align="center">
+                <template #default="scope">
+                  <span v-if="scope.row.total_score > 0" style="color: #409EFF; font-weight: bold; font-size: 15px;">
+                    {{ Number(scope.row.total_score).toFixed(2) }}
+                  </span>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="当前排名" width="90" align="center">
+                <template #default="scope">
+                  <el-tag v-if="scope.row.score_rank" :type="scope.row.score_rank === 1 ? 'danger' : 'info'" effect="dark">
+                    第 {{ scope.row.score_rank }} 名
+                  </el-tag>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
 
               <el-table-column label="操作" width="260" align="center" fixed="right">
                 <template #default="scope">
