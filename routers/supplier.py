@@ -6,7 +6,7 @@ import asyncio
 
 from models import (
     get_db, SessionLocal, InquirySupplier, InquiryTaskItem,
-    Quotation, LinkStatus, InquiryRequest, TaskStatus, InquiryTask, Supplier, User, Contract, ContractTemplate
+    Quotation, LinkStatus, InquiryRequest, TaskStatus, InquiryTask, Supplier, User, Contract
 )
 from schemas_supplier import QuoteSubmission, SupplierQuoteResponse, SupplierUpdate, SupplierContractInfoSubmit
 from services.contract_service import generate_contract_pdf
@@ -330,6 +330,70 @@ async def submit_quote(
             "ai_feedback": link.latest_ai_feedback
         }
 
+    # === 新增：统一秒杀检查 ===
+    kill_candidates = []
+    for l in all_links:
+        if l.status != LinkStatus.QUOTED:
+            continue
+        l_quotes = db.query(Quotation).filter(
+            Quotation.inquiry_supplier_id == l.id,
+            Quotation.round == l.current_round
+        ).all()
+        is_kill = True
+        has_target = False
+        for q in l_quotes:
+            t_item = db.query(InquiryTaskItem).filter(InquiryTaskItem.id == q.item_id).first()
+            r_item = db.query(InquiryRequest).filter(InquiryRequest.id == t_item.request_id).first() if t_item else None
+            target_p = r_item.target_price if r_item else None
+
+            if target_p is None:
+                is_kill = False
+                break
+            has_target = True
+            if q.price > target_p or (target_p > 0 and q.price <= target_p * 0.5):
+                is_kill = False
+                break
+        if has_target and is_kill:
+            kill_candidates.append(l)
+
+    if kill_candidates:
+        today = datetime.now().date()
+        score_input = []
+        for c_link in kill_candidates:
+            c_quotes = db.query(Quotation).filter(
+                Quotation.inquiry_supplier_id == c_link.id,
+                Quotation.round == c_link.current_round
+            ).all()
+            s_items = []
+            for q in c_quotes:
+                d_days = 0.0
+                if isinstance(q.delivery_date, (datetime, date)):
+                    d_date = q.delivery_date.date() if isinstance(q.delivery_date, datetime) else q.delivery_date
+                    d_days = float((d_date - today).days)
+                if d_days < 0:
+                    d_days = 0.0
+                s_items.append({"price": float(q.price or 0), "qty": float(q.qty or 0), "delivery_days": d_days})
+            score_input.append({"supplier_id": c_link.id, "items": s_items})
+
+        score_rows = calculate_supplier_scores(score_input)
+        best_supplier_id = (
+            max(score_rows, key=lambda r: float(r.get("total_score", 0))).get("supplier_id")
+            if score_rows
+            else kill_candidates[0].id
+        )
+
+        best_link = next(l for l in kill_candidates if l.id == best_supplier_id)
+        best_link.status = LinkStatus.DEAL
+        best_link.latest_ai_feedback = "您的报价已满足期望目标，系统已触发提前成交机制！"
+        link_task.status = TaskStatus.CLOSED
+
+        for ol in all_links:
+            if ol.id != best_link.id:
+                ol.status = LinkStatus.REJECT
+                ol.latest_ai_feedback = "有其他供应商报价达到期望目标，本次询价已提前结束。"
+        db.commit()
+        return {"message": "触发秒杀条件，系统已自动成交！", "next_action": "deal", "ai_feedback": link.latest_ai_feedback}
+
     # 3. 所有供应商均已报价，统一处理下一轮逻辑或结束
     strategy = link_task.strategy_config or {}
     max_rounds = strategy.get("max_rounds", 3)
@@ -399,99 +463,14 @@ async def submit_quote(
         }
         
     else:
-        # 达到最大轮数，按综合评分自动定标
-        today = datetime.now().date()
-        score_input = []
-        best_link = None
-
+        # 达到最大轮数，等待采购员手动定标
+        final_feedback = "最终轮报价已结束，系统已生成综合评分与排名，请等待采购员手动审批定标。"
         for l in all_links:
-            if l.status not in [LinkStatus.QUOTED, LinkStatus.DEAL]:
-                continue
-
-            quotes = db.query(Quotation).filter(
-                Quotation.inquiry_supplier_id == l.id,
-                Quotation.round == current_round
-            ).all()
-
-            if not quotes:
-                continue
-
-            score_items = []
-            for q in quotes:
-                delivery_days = 0.0
-                if isinstance(q.delivery_date, (datetime, date)):
-                    d_date = q.delivery_date.date() if isinstance(q.delivery_date, datetime) else q.delivery_date
-                    delivery_days = float((d_date - today).days)
-                    if delivery_days < 0:
-                        delivery_days = 0.0
-                elif q.delivery_date is not None:
-                    try:
-                        delivery_days = float(q.delivery_date)
-                        if delivery_days < 0:
-                            delivery_days = 0.0
-                    except (TypeError, ValueError):
-                        delivery_days = 0.0
-                score_items.append({
-                    "price": float(q.price or 0),
-                    "qty": float(q.qty or 0),
-                    "delivery_days": delivery_days,
-                })
-            score_input.append({"supplier_id": l.id, "items": score_items})
-
-        score_rows = calculate_supplier_scores(score_input)
-        if score_rows:
-            best_row = max(score_rows, key=lambda row: float(row.get("total_score", 0)))
-            best_supplier_id = best_row.get("supplier_id")
-            for l in all_links:
-                if l.id == best_supplier_id:
-                    best_link = l
-                    break
-
-        if best_link:
-            best_link.status = LinkStatus.DEAL
-            best_link.latest_ai_feedback = "感谢您的配合，本次询价已达成合作。"
-            best_quotes = db.query(Quotation).filter(
-                Quotation.inquiry_supplier_id == best_link.id,
-                Quotation.round == current_round
-            ).all()
-            total_amount = 0.0
-            for q in best_quotes:
-                t_item = db.query(InquiryTaskItem).filter(InquiryTaskItem.id == q.item_id).first()
-                r_item = db.query(InquiryRequest).filter(InquiryRequest.id == t_item.request_id).first() if t_item else None
-                qty = r_item.qty if r_item and r_item.qty is not None else (q.qty or 0)
-                total_amount += float(q.price or 0) * float(qty or 0)
-            active_template = db.query(ContractTemplate).filter(
-                ContractTemplate.is_active == True
-            ).order_by(ContractTemplate.id.desc()).first()
-            contract_record = db.query(Contract).filter(
-                Contract.inquiry_supplier_id == best_link.id
-            ).first()
-            if not contract_record:
-                contract_record = Contract(
-                    task_id=best_link.task_id,
-                    inquiry_supplier_id=best_link.id,
-                    status="待供应商填写"
-                )
-            contract_record.total_amount = total_amount
-            if active_template and active_template.default_buyer_name and not contract_record.buyer_company_name:
-                contract_record.buyer_company_name = active_template.default_buyer_name
-            db.add(contract_record)
-            for l in all_links:
-                if l.id != best_link.id and l.status != LinkStatus.DEAL:
-                    l.status = LinkStatus.REJECT
-                    l.latest_ai_feedback = "很遗憾，您的综合评分未能排名第一，本次询价已结束。"
-            link_task.status = TaskStatus.CLOSED
-            db.commit()
-            
-            if best_link.id == link.id:
-                return {
-                    "message": "报价已结束。恭喜，您的综合评分排名第一，系统已自动确认成交！",
-                    "next_action": "deal",
-                    "ai_feedback": best_link.latest_ai_feedback
-                }
-
+            if l.status == LinkStatus.QUOTED:
+                l.latest_ai_feedback = final_feedback
+        db.commit()
         return {
-            "message": "最终报价已收到，请等待比价结果或采购员审批。",
+            "message": "谈判轮次已达上限，等待采购员审批",
             "next_action": "wait",
-            "ai_feedback": link.latest_ai_feedback
+            "ai_feedback": final_feedback
         }
