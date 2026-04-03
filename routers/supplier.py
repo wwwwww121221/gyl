@@ -156,6 +156,7 @@ def get_inquiry_details(
             "material_name": item.request.material_name,
             "material_code": item.request.material_code,
             "qty": item.request.qty,
+            "target_delivery_date": item.request.delivery_date,
             "delivery_date": default_delivery,
             "price": float(prev_q.price) if prev_q and prev_q.price is not None else None,
             "remark": prev_q.remark if prev_q else "",

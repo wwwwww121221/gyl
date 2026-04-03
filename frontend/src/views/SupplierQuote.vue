@@ -46,6 +46,12 @@
             <el-table-column prop="material_code" label="物料编码" width="120" />
             <el-table-column prop="material_name" label="物料名称" min-width="150" />
             <el-table-column prop="qty" label="需求数量" width="100" align="right" />
+            <el-table-column label="期望交期" width="120" align="center">
+              <template #default="scope">
+                <span v-if="scope.row.target_delivery_date">{{ scope.row.target_delivery_date }}</span>
+                <span v-else style="color: #909399;">不限</span>
+              </template>
+            </el-table-column>
             <el-table-column label="交货日期" width="180">
               <template #default="scope">
                 <el-form-item :prop="'items.' + scope.$index + '.delivery_date'" :rules="{ required: true, message: '请选择交期', trigger: 'change' }" style="margin-bottom: 0;">
@@ -188,6 +194,7 @@ const fetchQuoteInfo = async () => {
       material_code: item.material_code,
       material_name: item.material_name,
       qty: item.qty,
+      target_delivery_date: item.target_delivery_date ? String(item.target_delivery_date).substring(0, 10) : '',
       price: item.price !== null ? item.price : undefined,
       delivery_date: item.delivery_date ? String(item.delivery_date).substring(0, 10) : '',
       remark: item.remark || ''
