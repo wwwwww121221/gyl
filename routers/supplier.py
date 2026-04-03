@@ -85,7 +85,9 @@ def get_my_inquiries(
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier profile not found")
         
-    inquiries = db.query(InquirySupplier).filter(InquirySupplier.supplier_id == supplier.id).all()
+    inquiries = db.query(InquirySupplier).filter(
+        InquirySupplier.supplier_id == supplier.id
+    ).order_by(InquirySupplier.id.desc()).all()
     
     result = []
     for link in inquiries:
@@ -308,51 +310,7 @@ async def submit_quote(
     else:
         raise HTTPException(status_code=400, detail="Current link status does not allow quoting.")
 
-    # 2. 检查期望价格自动成交
-    strategy = link_task.strategy_config or {}
-    max_rounds = strategy.get("max_rounds", 3)
-
-    all_meet_target = True
-    has_target_price_set = False
-
-    for q in quote_items:
-        # 显式查询，避免 lazy load 报错
-        t_item = db.query(InquiryTaskItem).filter(InquiryTaskItem.id == q.item_id).first()
-        r_item = db.query(InquiryRequest).filter(InquiryRequest.id == t_item.request_id).first() if t_item else None
-        target_price = r_item.target_price if r_item else None
-        
-        if target_price is not None:
-            has_target_price_set = True
-            # 1. 价格高于期望价，不满足自动成交条件
-            if q.price > target_price:
-                all_meet_target = False
-                break
-            # 2. 熔断机制：价格异常过低（低于期望单价的50%），拦截自动成交，强制转为人工确认
-            elif target_price > 0 and q.price <= target_price * 0.5:
-                all_meet_target = False
-                break
-    
-    if has_target_price_set and all_meet_target:
-        link.status = LinkStatus.DEAL
-        link_task.status = TaskStatus.CLOSED
-        link.latest_ai_feedback = "感谢您的报价，本次询价已达成合作，请等待后续采购订单。"
-        
-        other_links = db.query(InquirySupplier).filter(
-            InquirySupplier.task_id == link.task_id,
-            InquirySupplier.id != link.id
-        ).all()
-        for ol in other_links:
-            ol.status = LinkStatus.REJECT
-            ol.latest_ai_feedback = "很遗憾，因其他供应商已达到我方期望目标，本次询价已结束。"
-            
-        db.commit()
-        return {
-            "message": "恭喜，您的报价已达到我们的期望目标，系统已自动确认成交！",
-            "next_action": "deal",
-            "ai_feedback": link.latest_ai_feedback
-        }
-
-    # 3. 检查是否所有活跃的供应商都已完成本轮报价
+    # 2. 检查是否所有活跃的供应商都已完成本轮报价
     all_links = db.query(InquirySupplier).filter(InquirySupplier.task_id == link.task_id).all()
     
     # 获取本轮还在参与的供应商 (状态是 SENT, NEGOTIATION 或 QUOTED)
@@ -372,7 +330,9 @@ async def submit_quote(
             "ai_feedback": link.latest_ai_feedback
         }
 
-    # 4. 所有供应商均已报价，统一处理下一轮逻辑或结束
+    # 3. 所有供应商均已报价，统一处理下一轮逻辑或结束
+    strategy = link_task.strategy_config or {}
+    max_rounds = strategy.get("max_rounds", 3)
     current_round = link.current_round
     if current_round < max_rounds:
         market_quotes = (

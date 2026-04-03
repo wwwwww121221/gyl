@@ -229,7 +229,7 @@ def get_my_tasks(
     """
     return db.query(InquiryTask).filter(
         InquiryTask.created_by == current_user.id
-    ).offset(skip).limit(limit).all()
+    ).order_by(InquiryTask.id.desc()).offset(skip).limit(limit).all()
 
 
 
