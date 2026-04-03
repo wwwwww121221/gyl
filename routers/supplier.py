@@ -10,7 +10,7 @@ from models import (
 )
 from schemas_supplier import QuoteSubmission, SupplierQuoteResponse, SupplierUpdate, SupplierContractInfoSubmit
 from services.contract_service import generate_contract_pdf
-from services.negotiation_service import calculate_bargain_feedback
+from services.negotiation_service import calculate_bargain_feedback, calculate_supplier_scores
 import logging
 from routers.inquiry import get_current_user
 
@@ -438,47 +438,66 @@ async def submit_quote(
         }
         
     else:
-        # 达到最大轮数，选择最低价
+        # 达到最大轮数，按综合评分自动定标
+        today = datetime.now().date()
+        score_input = []
         best_link = None
-        lowest_price = float('inf')
-        
+
         for l in all_links:
             if l.status not in [LinkStatus.QUOTED, LinkStatus.DEAL]:
                 continue
-                
+
             quotes = db.query(Quotation).filter(
                 Quotation.inquiry_supplier_id == l.id,
                 Quotation.round == current_round
             ).all()
-            
+
             if not quotes:
                 continue
-                
-            l_total_price = 0
+
+            score_items = []
             for q in quotes:
-                # 显式查询，避免 lazy load 报错
-                t_item = db.query(InquiryTaskItem).filter(InquiryTaskItem.id == q.item_id).first()
-                r_item = db.query(InquiryRequest).filter(InquiryRequest.id == t_item.request_id).first() if t_item else None
-                qty = r_item.qty if r_item else 1
-                l_total_price += q.price * qty
-                
-            if l_total_price < lowest_price:
-                lowest_price = l_total_price
-                best_link = l
-        
+                delivery_days = 0.0
+                if isinstance(q.delivery_date, datetime):
+                    delivery_days = float((q.delivery_date.date() - today).days)
+                    if delivery_days < 0:
+                        delivery_days = 0.0
+                elif q.delivery_date is not None:
+                    try:
+                        delivery_days = float(q.delivery_date)
+                        if delivery_days < 0:
+                            delivery_days = 0.0
+                    except (TypeError, ValueError):
+                        delivery_days = 0.0
+                score_items.append({
+                    "price": float(q.price or 0),
+                    "qty": float(q.qty or 0),
+                    "delivery_days": delivery_days,
+                })
+            score_input.append({"supplier_id": l.id, "items": score_items})
+
+        score_rows = calculate_supplier_scores(score_input)
+        if score_rows:
+            best_row = max(score_rows, key=lambda row: float(row.get("total_score", 0)))
+            best_supplier_id = best_row.get("supplier_id")
+            for l in all_links:
+                if l.id == best_supplier_id:
+                    best_link = l
+                    break
+
         if best_link:
             best_link.status = LinkStatus.DEAL
             best_link.latest_ai_feedback = "感谢您的配合，本次询价已达成合作。"
             for l in all_links:
                 if l.id != best_link.id and l.status != LinkStatus.DEAL:
                     l.status = LinkStatus.REJECT
-                    l.latest_ai_feedback = "很遗憾，您的最终报价未能成为最低价，本次询价已结束。"
+                    l.latest_ai_feedback = "很遗憾，您的综合评分未能排名第一，本次询价已结束。"
             link_task.status = TaskStatus.CLOSED
             db.commit()
             
             if best_link.id == link.id:
                 return {
-                    "message": "报价已结束。恭喜，您的报价为最低价，系统已自动确认成交！",
+                    "message": "报价已结束。恭喜，您的综合评分排名第一，系统已自动确认成交！",
                     "next_action": "deal",
                     "ai_feedback": best_link.latest_ai_feedback
                 }
