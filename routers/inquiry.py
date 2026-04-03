@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 from pydantic import BaseModel
 import uuid
+from datetime import datetime
 
 from models import (
     get_db, User, InquiryRequest, InquiryTask, InquiryTaskItem,
@@ -10,6 +11,7 @@ from models import (
 )
 from schemas import InquiryTaskCreate, InquiryTask as InquiryTaskSchema, StrategyConfig, InquiryRequest as InquiryRequestSchema
 from routers.auth import oauth2_scheme, login_access_token # reuse auth but simpler dependency
+from services.negotiation_service import calculate_supplier_scores
 
 # 简单的用户获取依赖
 from jose import jwt, JWTError
@@ -258,6 +260,45 @@ def get_task_details(
     # 建立任务明细项(item_id)到期望单价(target_price)的映射
     target_price_map = {item.id: item.request.target_price for item in task.items if item.request.target_price is not None}
 
+    today = datetime.now().date()
+    score_input = []
+    for link in task.suppliers:
+        if link.status == LinkStatus.REJECT:
+            continue
+        current_round_quotes = [q for q in link.quotations if q.round == link.current_round]
+        score_items = []
+        for q in current_round_quotes:
+            delivery_days = 0.0
+            if isinstance(q.delivery_date, datetime):
+                delivery_days = float((q.delivery_date.date() - today).days)
+                if delivery_days < 0:
+                    delivery_days = 0.0
+            elif q.delivery_date is not None:
+                try:
+                    delivery_days = float(q.delivery_date)
+                    if delivery_days < 0:
+                        delivery_days = 0.0
+                except (TypeError, ValueError):
+                    delivery_days = 0.0
+            score_items.append({
+                "price": float(q.price or 0),
+                "qty": float(q.qty or 0),
+                "delivery_days": delivery_days,
+            })
+        score_input.append({
+            "supplier_id": link.id,
+            "items": score_items,
+        })
+
+    score_rows = calculate_supplier_scores(score_input)
+    score_map = {row.get("supplier_id"): row for row in score_rows}
+    rank_candidates = sorted(
+        score_rows,
+        key=lambda row: float(row.get("total_score", 0)),
+        reverse=True
+    )
+    rank_map = {row.get("supplier_id"): idx + 1 for idx, row in enumerate(rank_candidates)}
+
     links = []
     for link in task.suppliers:
         quotes_by_round = {}
@@ -287,12 +328,19 @@ def get_task_details(
                 "anomaly_reason": anomaly_reason
             })
 
+        score_info = score_map.get(link.id, {})
         links.append({
             "link_id": link.id,
             "supplier_name": link.supplier.name,
             "status": link.status,
             "current_round": link.current_round,
-            "quotes": quotes_by_round
+            "quotes": quotes_by_round,
+            "total_price": float(score_info.get("total_price", 0)),
+            "avg_delivery_days": float(score_info.get("avg_delivery_days", 0)),
+            "price_score": float(score_info.get("price_score", 0)),
+            "delivery_score": float(score_info.get("delivery_score", 0)),
+            "total_score": float(score_info.get("total_score", 0)),
+            "score_rank": rank_map.get(link.id)
         })
 
     return {
@@ -348,7 +396,7 @@ def close_inquiry_task(
 ) -> Any:
     """
     手动关闭询价任务。如果指定了 selected_link_id，则该供应商成交，其他淘汰。
-    如果不指定，则直接关闭（流标）。
+    如果不指定，则按综合评分自动定标；若无有效候选则流标。
     """
     task = db.query(InquiryTask).filter(InquiryTask.id == task_id).first()
     if not task:
@@ -356,16 +404,53 @@ def close_inquiry_task(
 
     task.status = TaskStatus.CLOSED
     selected_link = None
+    selected_link_key = selected_link_id
+
+    if selected_link_id is None:
+        today = datetime.now().date()
+        score_input = []
+        active_links = [link for link in task.suppliers if link.status != LinkStatus.REJECT]
+        for link in active_links:
+            current_round_quotes = [q for q in link.quotations if q.round == link.current_round]
+            if not current_round_quotes and link.quotations:
+                latest_round = max(q.round for q in link.quotations)
+                current_round_quotes = [q for q in link.quotations if q.round == latest_round]
+            score_items = []
+            for q in current_round_quotes:
+                delivery_days = 0.0
+                if isinstance(q.delivery_date, datetime):
+                    delivery_days = float((q.delivery_date.date() - today).days)
+                    if delivery_days < 0:
+                        delivery_days = 0.0
+                elif q.delivery_date is not None:
+                    try:
+                        delivery_days = float(q.delivery_date)
+                        if delivery_days < 0:
+                            delivery_days = 0.0
+                    except (TypeError, ValueError):
+                        delivery_days = 0.0
+                score_items.append(
+                    {
+                        "price": float(q.price or 0),
+                        "qty": float(q.qty or 0),
+                        "delivery_days": delivery_days,
+                    }
+                )
+            score_input.append({"supplier_id": link.id, "items": score_items})
+
+        score_rows = calculate_supplier_scores(score_input)
+        if score_rows:
+            best_row = max(score_rows, key=lambda row: float(row.get("total_score", 0)))
+            selected_link_key = best_row.get("supplier_id")
 
     for link in task.suppliers:
-        if selected_link_id and link.id == selected_link_id:
+        if selected_link_key is not None and link.id == selected_link_key:
             link.status = LinkStatus.DEAL
             selected_link = link
         else:
-            if link.status not in [LinkStatus.REJECT, LinkStatus.DEAL]:
-                link.status = LinkStatus.REJECT
+            link.status = LinkStatus.REJECT
 
-    if selected_link_id and not selected_link:
+    if selected_link_key is not None and not selected_link:
         raise HTTPException(status_code=404, detail="Selected supplier link not found in this task")
 
     if selected_link:

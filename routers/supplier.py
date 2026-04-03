@@ -9,9 +9,8 @@ from models import (
     Quotation, LinkStatus, InquiryRequest, TaskStatus, InquiryTask, Supplier, User, Contract
 )
 from schemas_supplier import QuoteSubmission, SupplierQuoteResponse, SupplierUpdate, SupplierContractInfoSubmit
-from services.llm_factory import get_llm_service
 from services.contract_service import generate_contract_pdf
-from schemas import ChatMessage
+from services.negotiation_service import calculate_bargain_feedback
 import logging
 from routers.inquiry import get_current_user
 
@@ -312,7 +311,6 @@ async def submit_quote(
     # 2. 检查期望价格自动成交
     strategy = link_task.strategy_config or {}
     max_rounds = strategy.get("max_rounds", 3)
-    bargain_ratio = strategy.get("bargain_ratio", 0.05)
 
     all_meet_target = True
     has_target_price_set = False
@@ -377,70 +375,57 @@ async def submit_quote(
     # 4. 所有供应商均已报价，统一处理下一轮逻辑或结束
     current_round = link.current_round
     if current_round < max_rounds:
-        llm = get_llm_service()
-        
-        # 为每个 QUOTED 的供应商生成反馈并进入下一轮
-        # TODO: 实际生产中这里可以使用 asyncio.gather 并发调用，这里为了稳定先顺序调用或简单并发
-        import asyncio
-        
+        market_quotes = (
+            db.query(Quotation)
+            .join(InquirySupplier, Quotation.inquiry_supplier_id == InquirySupplier.id)
+            .filter(
+                InquirySupplier.task_id == link.task_id,
+                InquirySupplier.status != LinkStatus.REJECT,
+                Quotation.round == current_round
+            )
+            .all()
+        )
+        market_min_price_map = {}
+        for mq in market_quotes:
+            price = float(mq.price or 0)
+            if price <= 0:
+                continue
+            if mq.item_id not in market_min_price_map or price < market_min_price_map[mq.item_id]:
+                market_min_price_map[mq.item_id] = price
+
         async def process_link(l):
             # 获取该供应商本轮报价
             l_quotes = db.query(Quotation).filter(Quotation.inquiry_supplier_id == l.id, Quotation.round == current_round).all()
             if not l_quotes:
                 return
                 
-            # 显式查询以避免 async def 中的 SQLAlchemy lazy load 问题
-            item_summary_lines = []
-            needs_manual_review = False
-            anomaly_reason = ""
+            feedback_lines = []
             
             for q in l_quotes:
                 t_item = db.query(InquiryTaskItem).filter(InquiryTaskItem.id == q.item_id).first()
                 r_item = db.query(InquiryRequest).filter(InquiryRequest.id == t_item.request_id).first()
-                item_summary_lines.append(f"- 物料名称 '{r_item.material_name}': 报价 ¥{q.price}")
-                
-                # 检查是否存在异常报价（双向防线：过低或过高）
-                target_p = r_item.target_price if r_item else None
-                if target_p is not None and target_p > 0:
-                    if q.price <= target_p * 0.5:
-                        needs_manual_review = True
-                        anomaly_reason = "大幅低于期望基准（存在漏报或错报规格风险）"
-                    elif q.price >= target_p * 1.5:
-                        needs_manual_review = True
-                        anomaly_reason = "大幅高于期望基准（存在错报单位或溢价过高风险）"
-            
-            # 1. 拦截大模型：如果存在异常报价，强制跳过 AI 自动砍价，锁入人工复核状态
-            if needs_manual_review:
-                l.latest_ai_feedback = f"⚠️ 系统预警：您的报价{anomaly_reason}。系统已暂停您的自动谈判流程，并转交采购员进行人工核对，请等待采购方主动联系。"
-                l.current_round += 1
-                l.status = LinkStatus.NEGOTIATION
-                return
-            
-            # 2. 只有在正常价格区间内，才进行大模型 5% 的议价谈判逻辑
-            item_summary = "\n".join(item_summary_lines)
-            
-            prompt = f"""
-            你是一个专业的采购谈判专家。当前正在进行第 {current_round} 轮谈判（共 {max_rounds} 轮）。
-            供应商提交了以下报价：
-            {item_summary}
-            
-            我们的目标是基于当前价格再降低 {bargain_ratio*100}%。
-            请生成一段回复给供应商，直接指出价格偏高，要求重新报价。
-            语气要专业、礼貌但坚定。
-            """
-            try:
-                response = await llm.chat_completion([
-                    ChatMessage(role="system", content="你是一个采购智能体。"),
-                    ChatMessage(role="user", content=prompt)
-                ])
-                l.latest_ai_feedback = response.content
-                l.current_round += 1
-                l.status = LinkStatus.NEGOTIATION
-            except Exception as e:
-                logger.error(f"LLM Error for link {l.id}: {e}")
-                l.latest_ai_feedback = f"系统已收到报价，请基于目标再下调 {bargain_ratio*100}% 重新报价。"
-                l.current_round += 1
-                l.status = LinkStatus.NEGOTIATION
+                target_price = float(r_item.target_price) if r_item and r_item.target_price is not None else 0.0
+                market_min_price = float(market_min_price_map.get(q.item_id, q.price or 0))
+                drop_ratio, suggested_price, feedback = calculate_bargain_feedback(
+                    target_price=target_price,
+                    market_min_price=market_min_price,
+                    current_price=float(q.price or 0),
+                    current_round=current_round,
+                    max_rounds=max_rounds,
+                )
+                material_name = r_item.material_name if r_item else f"物料#{q.item_id}"
+                if feedback:
+                    feedback_lines.append(
+                        f"{material_name}：当前报价{float(q.price or 0):.4f}元，建议下调{drop_ratio * 100:.2f}%至{suggested_price:.4f}元。"
+                    )
+                else:
+                    feedback_lines.append(
+                        f"{material_name}：当前报价{float(q.price or 0):.4f}元，已接近目标区间，可保持或小幅优化。"
+                    )
+
+            l.latest_ai_feedback = "系统已完成本轮价格分析，请参考以下建议进行下一轮报价：\n" + "\n".join(feedback_lines)
+            l.current_round += 1
+            l.status = LinkStatus.NEGOTIATION
 
         quoted_links = [l for l in all_links if l.status == LinkStatus.QUOTED]
         await asyncio.gather(*(process_link(l) for l in quoted_links))
