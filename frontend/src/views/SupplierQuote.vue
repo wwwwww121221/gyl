@@ -252,8 +252,9 @@ const submitButtonText = computed(() => {
 const buildQuotePayload = (forceSubmit = false) => ({
   items: form.items.map(i => ({
     request_id: i.request_id,
-    price: i.price,
-    delivery_date: i.delivery_date ? new Date(i.delivery_date).toISOString() : new Date().toISOString(),
+    qty: i.qty,
+    price: Number(i.price),
+    delivery_date: i.delivery_date,
     remark: i.remark || ''
   })),
   force_submit: forceSubmit

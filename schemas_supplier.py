@@ -1,12 +1,12 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
-from datetime import datetime
+from typing import List, Optional, Union
+from datetime import datetime, date
 
 class QuoteItem(BaseModel):
     request_id: int
     qty: Optional[float] = None
     price: float
-    delivery_date: Optional[datetime] = None
+    delivery_date: Optional[Union[datetime, date, str]] = None
     remark: Optional[str] = None
 
 class QuoteSubmission(BaseModel):
